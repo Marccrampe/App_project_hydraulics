@@ -318,36 +318,35 @@ def plot_velocity_field_fig(
     Bi, Bm, Bo
 ):
     """
-    Viz type "avant / après" à la façon de ton script :
-      - gauche : écoulement sans vanes
-      - droite : écoulement avec vanes
-    On utilise le champ pseudo-CFD 3-zones pour les deux cas.
+    Viz type "avant / après" en VERTICAL :
+      - haut : écoulement sans vanes
+      - bas  : écoulement avec vanes
     """
-    # Domaine (mêmes grilles)
     Lx = X_base.max()
     Ly = Y_base.max()
 
     speed_base = np.sqrt(U_base**2 + V_base**2)
     speed_vane = np.sqrt(U_vane**2 + V_vane**2)
 
-    fig, axes = plt.subplots(1, 2, figsize=(9, 3), sharey=True)
+    fig, axes = plt.subplots(2, 1, figsize=(6, 8), sharex=True, sharey=True)
 
-    # ---------- 1) SANS vanes ----------
-    ax = axes[0]
-    cf1 = ax.contourf(X_base, Y_base, speed_base, levels=40, cmap="viridis")
-    plt.colorbar(cf1, ax=ax, label="|U| (m/s)")
-    ax.streamplot(X_base, Y_base, U_base, V_base, density=2, color="k", linewidth=0.6)
-    ax.set_title("Flow WITHOUT vanes")
-    ax.set_xlabel("x (streamwise)")
-    ax.set_ylabel("y (cross-stream)")
-    ax.set_xlim(0, Lx)
-    ax.set_ylim(0, Ly)
+    # ---------- 1) SANS vanes (en haut) ----------
+    ax_top = axes[0]
+    cf1 = ax_top.contourf(X_base, Y_base, speed_base, levels=40, cmap="viridis")
+    plt.colorbar(cf1, ax=ax_top, label="|U| (m/s)")
+    ax_top.streamplot(X_base, Y_base, U_base, V_base, density=2,
+                      color="k", linewidth=0.6)
+    ax_top.set_title("Flow WITHOUT vanes")
+    ax_top.set_ylabel("y (cross-stream)")
+    ax_top.set_xlim(0, Lx)
+    ax_top.set_ylim(0, Ly)
 
-    # ---------- 2) AVEC vanes ----------
-    ax = axes[1]
-    cf2 = ax.contourf(X_vane, Y_vane, speed_vane, levels=40, cmap="viridis")
-    plt.colorbar(cf2, ax=ax, label="|U| (m/s)")
-    ax.streamplot(X_vane, Y_vane, U_vane, V_vane, density=2, color="k", linewidth=0.6)
+    # ---------- 2) AVEC vanes (en bas) ----------
+    ax_bot = axes[1]
+    cf2 = ax_bot.contourf(X_vane, Y_vane, speed_vane, levels=40, cmap="viridis")
+    plt.colorbar(cf2, ax=ax_bot, label="|U| (m/s)")
+    ax_bot.streamplot(X_vane, Y_vane, U_vane, V_vane, density=2,
+                      color="k", linewidth=0.6)
 
     # Position schématique des vanes dans la zone externe
     vane_x_start = 0.4 * Lx
@@ -355,15 +354,21 @@ def plot_velocity_field_fig(
     xv = 0.5 * (vane_x_start + vane_x_end)
     yv = Bi + Bm + 0.5 * Bo  # milieu de la zone outer
 
-    ax.plot([vane_x_start, vane_x_end], [yv, yv],
-            color="red", linewidth=4, solid_capstyle="round",
-            label="Submerged vane array")
-    ax.legend(loc="upper right")
+    ax_bot.plot(
+        [vane_x_start, vane_x_end],
+        [yv, yv],
+        color="red",
+        linewidth=4,
+        solid_capstyle="round",
+        label="Submerged vane array",
+    )
+    ax_bot.legend(loc="upper right")
 
-    ax.set_title("Flow WITH submerged vanes")
-    ax.set_xlabel("x (streamwise)")
-    ax.set_xlim(0, Lx)
-    ax.set_ylim(0, Ly)
+    ax_bot.set_title("Flow WITH submerged vanes")
+    ax_bot.set_xlabel("x (streamwise)")
+    ax_bot.set_ylabel("y (cross-stream)")
+    ax_bot.set_xlim(0, Lx)
+    ax_bot.set_ylim(0, Ly)
 
     plt.tight_layout()
     return fig
@@ -381,11 +386,6 @@ def plot_vane_3d(
 ):
     """
     3D visualisation of the channel and submerged vanes.
-
-    - vanes au milieu du canal (y ~ B/2)
-    - flow vers +x
-    - angle d'attaque alpha_attack = angle entre la vane et la direction du flow (plan vue)
-    - bevel_angle = différence de hauteur entre amont et aval de la vane
     """
 
     L_reach = 40.0  # length of the plotted reach in x
@@ -442,10 +442,10 @@ def plot_vane_3d(
     )
 
     if use_vane:
-        # Outer zone width ~ 0.3 * B, on s'en sert pour calibrer la longueur
+        # Outer zone width ~ 0.3 * B, for scaling if needed
         Bo = 0.3 * B
 
-        # vanes plus LONGUES que hautes
+        # vanes plus LONGUES que hautes (réaliste)
         vane_height = 0.3 * h           # ~30% de la profondeur
         vane_length = 2.0 * h           # longueur ≈ 2× profondeur
 
@@ -750,10 +750,10 @@ def main():
     U1_mod = U1 * (1.0 + 0.15 * np.sin(2 * np.pi * time_phase))
     V1_mod = V1 * (1.0 + 0.15 * np.cos(2 * np.pi * time_phase))
 
-    # -------- Plots: 3D vane, cross-section, velocity field --------
-    c1, c2, c3 = st.columns(3)
+    # -------- TOP ROW: 3D vane + cross section --------
+    top_left, top_right = st.columns(2)
 
-    with c1:
+    with top_left:
         fig_3d = plot_vane_3d(
             B=B,
             h=h,
@@ -766,17 +766,17 @@ def main():
         )
         st.pyplot(fig_3d)
 
-    with c2:
+    with top_right:
         fig_cs = plot_cross_section(B, h, Bi, Bm, Bo, scour_risk, use_vane, use_bevel)
         st.pyplot(fig_cs)
 
-    with c3:
-        fig_vf = plot_velocity_field_fig(
-            X0, Y0, U0, V0,
-            X1, Y1, U1_mod, V1_mod,
-            Bi2, Bm2, Bo2,
-        )
-        st.pyplot(fig_vf)
+    # -------- BOTTOM ROW: velocity field full width --------
+    fig_vf = plot_velocity_field_fig(
+        X0, Y0, U0, V0,
+        X1, Y1, U1_mod, V1_mod,
+        Bi2, Bm2, Bo2,
+    )
+    st.pyplot(fig_vf)
 
     # -------- Text summary --------
     st.markdown("---")
@@ -797,4 +797,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
