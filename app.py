@@ -130,7 +130,7 @@ def gamma_from_geometry(
         f_array = 1.0
     f_array = np.clip(f_array, 1.0, 1.5)
 
-    # Bevel effect on guidance
+    # Bevel effect on guidance (small effect)
     if bevel_angle_deg is None or bevel_angle_deg <= 0:
         f_bevel_geom = 1.0
     else:
@@ -180,8 +180,8 @@ def local_scour_risk_from_geometry(
     if bevel_angle_deg is None or bevel_angle_deg <= 0:
         f_bevel = 1.0
     else:
-        bevel_norm = np.clip(bevel_angle_deg / 45.0, 0.0, 1.0)
-        f_bevel = 1.0 - 0.5 * bevel_norm  # jusqu'à -50% du scour
+        bevel_norm = np.clip(bevel_angle_deg / 70.0, 0.0, 1.0)
+        f_bevel = 1.0 - 0.5 * bevel_norm  # jusqu'à -50% du scour à 70°
         f_bevel = np.clip(f_bevel, 0.5, 1.0)
 
     # Material effect
@@ -373,6 +373,9 @@ def plot_vane_3d(
 ):
     """
     3D visualisation of the channel, outer bank and submerged vanes.
+    - vanes au milieu (y ≈ B/2)
+    - alignées avec le flow (le long de x)
+    - bevel visible via top edge inclinée
     """
 
     L_reach = 40.0  # length of the plotted reach in x
@@ -408,20 +411,20 @@ def plot_vane_3d(
     surface = Poly3DCollection(surface_verts, alpha=0.05, facecolor="blue")
     ax.add_collection3d(surface)
 
-    # --- Outer bank line (y = B) ---
+    # --- Outer bank line (y = B) for contexte ---
     ax.plot([0, L_reach], [B, B], [0, 0], "k-", lw=2)
     ax.text(L_reach * 0.05, B + 0.2, 0.0, "Outer bank", fontsize=9)
 
     # --- Flow direction arrow (along +x) ---
     ax.quiver(
-        0.0, B * 0.1, 0.6 * h,
+        0.0, B * 0.15, 0.6 * h,
         10.0, 0.0, 0.0,
         length=1.0,
         normalize=False,
         arrow_length_ratio=0.2,
     )
     ax.text(
-        10.0, B * 0.1, 0.6 * h,
+        10.0, B * 0.15, 0.6 * h,
         "Flow direction",
         fontsize=9,
         ha="left",
@@ -429,33 +432,43 @@ def plot_vane_3d(
     )
 
     if use_vane:
-        # Outer zone width ~ 0.3 * B
+        # Outer zone width ~ 0.3 * B, on s'en sert pour calibrer la longueur
         Bo = 0.3 * B
-        vane_length = L_rel * Bo
-        vane_height = 0.7 * h  # submerged vane height
+        vane_length = L_rel * Bo       # along x (flow)
+        vane_height = 0.7 * h         # vertical height
+        y0 = B * 0.5                  # milieu du canal
 
-        theta = np.deg2rad(alpha_attack)
-
-        # Positions of vanes along the bank
-        xs = np.linspace(L_reach * 0.2, L_reach * 0.8, n_vanes)
+        # positions en x centrées dans le reach
+        xs = np.linspace(L_reach * 0.3, L_reach * 0.7, n_vanes)
         vane_areas = []
 
+        theta_b = np.deg2rad(bevel_angle)
+        # différence de hauteur due au bevel (juste pour viz, facteur 0.6)
+        dz_bevel = vane_height * 0.6 * np.sin(theta_b)
+
         for x0 in xs:
-            y0 = B
             z0 = 0.0
 
-            dx = vane_length * np.cos(theta)
-            dy = -vane_length * np.sin(theta)  # into the channel
+            # base line (en x, alignée avec le flow)
+            x1 = x0
+            x2 = x0 + vane_length
 
-            p1 = (x0,      y0,      z0)
-            p2 = (x0 + dx, y0 + dy, z0)
-            p3 = (x0 + dx, y0 + dy, z0 + vane_height)
-            p4 = (x0,      y0,      z0 + vane_height)
+            # bas du panneau
+            p1 = (x1, y0, z0)
+            p2 = (x2, y0, z0)
+
+            # haut du panneau : on incline le bord amont/aval selon le bevel
+            # ici: amont = x1, aval = x2 (tu peux inverser si besoin)
+            z1_top = vane_height + dz_bevel      # côté amont plus haut
+            z2_top = vane_height                 # côté aval
+
+            p3 = (x2, y0, z2_top)  # aval haut
+            p4 = (x1, y0, z1_top)  # amont haut
 
             poly = Poly3DCollection([[p1, p2, p3, p4]],
                                     facecolor=vane_color,
                                     edgecolor="k",
-                                    alpha=0.8)
+                                    alpha=0.9)
             ax.add_collection3d(poly)
 
             area = vane_length * vane_height
@@ -466,9 +479,8 @@ def plot_vane_3d(
         txt = (
             f"{n_vanes} vane(s)\n"
             f"L_rel = {L_rel:.2f}\n"
-            f"α = {alpha_attack:.1f}°\n"
+            f"Bevel θ = {bevel_angle:.1f}°\n"
             f"Material = {material}\n"
-            f"Bevel = {bevel_angle:.1f}°\n"
             f"Total area ≈ {total_area:.1f} m²"
         )
         ax.text(
@@ -489,7 +501,7 @@ def plot_vane_3d(
     ax.set_ylabel("Cross-stream y [m]")
     ax.set_zlabel("Depth z [m]")
 
-    ax.set_title("3D view of submerged vane configuration")
+    ax.set_title("3D view of submerged vane configuration (aligned with flow)")
 
     ax.view_init(elev=25, azim=-60)
     ax.grid(True, alpha=0.2)
@@ -558,7 +570,7 @@ def main():
     )
 
     alpha_attack = st.sidebar.slider(
-        "Attack angle (plan view) [°]",
+        "Attack angle (for hydraulics model) [°]",
         5,
         30,
         20,
@@ -569,11 +581,11 @@ def main():
 
     use_bevel = st.sidebar.checkbox("Bevelled leading edge", value=True)
     bevel_angle = st.sidebar.slider(
-        "Bevel angle [°]",
+        "Bevel angle θ [°]",
         0,
-        45,
+        70,
         30,
-        5,
+        10,
         disabled=not use_bevel,
     )
     if not use_bevel:
@@ -702,7 +714,7 @@ def main():
         f"- **Vanes active**: {'Yes' if use_vane else 'No'}  \n"
         f"- **Material**: {material} (nᵒ effective ≈ {n_o_eff:.3f})  \n"
         f"- **L_rel** = {L_rel:.2f}, **attack angle** = {alpha_attack:.1f}°, "
-        f"**n_vanes** = {n_vanes}, **bevel angle** = {bevel_angle:.1f}°  \n"
+        f"**n_vanes** = {n_vanes}, **bevel angle θ** = {bevel_angle:.1f}°  \n"
         f"- **γ (deflected Qo)** ≈ {gamma:.3f}  \n"
         f"- **Outer-bank velocity reduction** ≈ {red_V * 100:.1f}%  \n"
         f"- **Shear proxy reduction** ≈ {red_tau * 100:.1f}%  \n"
@@ -712,4 +724,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
