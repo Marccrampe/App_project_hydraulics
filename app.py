@@ -1,7 +1,11 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import streamlit as st
+
 from matplotlib.patches import Ellipse, Rectangle
+from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
+from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+
 
 # ============================================================
 # 1. Core hydraulics: 3-zone bend model
@@ -28,6 +32,7 @@ def compute_outer_velocity(
     """
     Simple 3-zone bend model for a rectangular cross-section.
     """
+
     # Split width into 3 zones: inner, mid, outer
     Bi = 0.3 * B
     Bm = 0.4 * B
@@ -107,6 +112,7 @@ def gamma_from_geometry(
     Compute gamma (fraction of outer-zone discharge diverted to mid-channel)
     from vane geometry and material.
     """
+
     # Length factor: more length → more interaction with outer flow
     L_ref = 0.5
     f_L = 1.0 + 0.6 * (L_rel - L_ref)
@@ -152,6 +158,7 @@ def local_scour_risk_from_geometry(
     """
     Relative local scour risk indicator around the vanes.
     """
+
     # Base risk for a "classical" single non-bevelled concrete vane
     base_risk = 0.8
 
@@ -189,7 +196,7 @@ def local_scour_risk_from_geometry(
 # 3. Pseudo-CFD field builder
 # ============================================================
 
-def build_velocity_field(B, h, Q, n0, alpha_bend, gamma, n_o_eff, nx=40, ny=25):
+def build_velocity_field(B, h, Q, n0, alpha_bend, gamma, n_o_eff, nx=50, ny=25):
     """
     Build a 2D velocity field in a bend reach using 3-zone velocities.
     """
@@ -238,7 +245,7 @@ def build_velocity_field(B, h, Q, n0, alpha_bend, gamma, n_o_eff, nx=40, ny=25):
 
 
 # ============================================================
-# 4. Plot helpers (cross-section, velocity field, vane geometry)
+# 4. Plot helpers (cross-section, velocity field, vane 3D)
 # ============================================================
 
 def plot_cross_section(B, h, Bi, Bm, Bo, scour_risk, use_vane, use_bevel):
@@ -354,103 +361,140 @@ def plot_velocity_field_fig(B, X, Y, U_mod, V_mod, Bi, Bm, Bo):
     return fig
 
 
-def plot_vane_plan_view(B, L_rel, alpha_attack, n_vanes, bevel_angle, material, use_vane):
+def plot_vane_3d(
+    B,
+    h,
+    L_rel,
+    alpha_attack,
+    n_vanes,
+    bevel_angle,
+    material,
+    use_vane=True,
+):
     """
-    Plan view of outer bank with vanes (array vs single, bevel).
+    3D visualisation of the channel, outer bank and submerged vanes.
     """
-    L_reach = 100.0
-    fig, ax = plt.subplots(figsize=(5, 3))
 
-    # Outer bank line
-    outer_y = B
-    ax.plot([0, L_reach], [outer_y, outer_y], "k-", lw=2)
-    ax.text(L_reach * 0.02, outer_y + 0.3, "Outer bank", va="bottom", fontsize=8)
+    L_reach = 40.0  # length of the plotted reach in x
+    fig = plt.figure(figsize=(6, 5))
+    ax = fig.add_subplot(111, projection="3d")
 
-    # Channel interior
-    ax.fill_between([0, L_reach], 0, outer_y, alpha=0.05)
+    # --- Colors per material ---
+    color_map = {
+        "steel": "silver",
+        "concrete": "lightgrey",
+        "wood": "saddlebrown",
+        "rock": "dimgray",
+    }
+    vane_color = color_map.get(material, "lightgrey")
 
-    # Main flow direction arrow
-    ax.annotate(
-        "",
-        xy=(L_reach * 0.9, B * 0.1),
-        xytext=(L_reach * 0.1, B * 0.1),
-        arrowprops=dict(arrowstyle="->", linewidth=1.5),
+    # --- Channel floor ---
+    floor_verts = [[
+        (0,   0, 0),
+        (L_reach, 0, 0),
+        (L_reach, B, 0),
+        (0,   B, 0),
+    ]]
+    floor = Poly3DCollection(floor_verts, alpha=0.15, facecolor="lightblue")
+    ax.add_collection3d(floor)
+
+    # --- Water surface at z = h ---
+    surface_verts = [[
+        (0,   0, h),
+        (L_reach, 0, h),
+        (L_reach, B, h),
+        (0,   B, h),
+    ]]
+    surface = Poly3DCollection(surface_verts, alpha=0.05, facecolor="blue")
+    ax.add_collection3d(surface)
+
+    # --- Outer bank line (y = B) ---
+    ax.plot([0, L_reach], [B, B], [0, 0], "k-", lw=2)
+    ax.text(L_reach * 0.05, B + 0.2, 0.0, "Outer bank", fontsize=9)
+
+    # --- Flow direction arrow (along +x) ---
+    ax.quiver(
+        0.0, B * 0.1, 0.6 * h,
+        10.0, 0.0, 0.0,
+        length=1.0,
+        normalize=False,
+        arrow_length_ratio=0.2,
     )
-    ax.text(L_reach * 0.5, B * 0.12, "Main flow", ha="center", va="bottom", fontsize=8)
+    ax.text(
+        10.0, B * 0.1, 0.6 * h,
+        "Flow direction",
+        fontsize=9,
+        ha="left",
+        va="center",
+    )
 
     if use_vane:
-        # Material color
-        color_map = {
-            "steel": "grey",
-            "concrete": "black",
-            "wood": "saddlebrown",
-            "rock": "dimgray",
-        }
-        vane_color = color_map.get(material, "black")
-
-        # Outer-zone width (schematic) = 0.3 * B
+        # Outer zone width ~ 0.3 * B
         Bo = 0.3 * B
         vane_length = L_rel * Bo
-
-        # Positions of vanes along the bank
-        xs = np.linspace(L_reach * 0.45, L_reach * 0.8, n_vanes)
+        vane_height = 0.7 * h  # submerged vane height
 
         theta = np.deg2rad(alpha_attack)
-        dx = vane_length * np.cos(theta)
-        dy = -vane_length * np.sin(theta)  # into the channel
+
+        # Positions of vanes along the bank
+        xs = np.linspace(L_reach * 0.2, L_reach * 0.8, n_vanes)
+        vane_areas = []
 
         for x0 in xs:
-            y0 = outer_y
-            x1 = x0 + dx
-            y1 = y0 + dy
-            ax.plot([x0, x1], [y0, y1], color=vane_color, lw=3)
+            y0 = B
+            z0 = 0.0
 
-            # Bevel illustration: small short line at outer tip
-            if bevel_angle and bevel_angle > 0:
-                phi = np.deg2rad(alpha_attack + 90)
-                bx0, by0 = x0, y0
-                bdx = 0.2 * vane_length * np.cos(phi)
-                bdy = 0.2 * vane_length * np.sin(phi)
-                ax.plot(
-                    [bx0, bx0 + bdx],
-                    [by0, by0 + bdy],
-                    color=vane_color,
-                    lw=1,
-                    alpha=0.7,
-                )
+            dx = vane_length * np.cos(theta)
+            dy = -vane_length * np.sin(theta)  # into the channel
 
-        # Legend-like annotation
-        txt = f"{n_vanes} vane(s)\nL_rel={L_rel:.2f}, α={alpha_attack:.0f}°"
-        if bevel_angle and bevel_angle > 0:
-            txt += f"\nBevel={bevel_angle:.0f}°"
-        txt += f"\nMaterial={material}"
-        ax.text(
-            L_reach * 0.05,
-            B * 0.5,
-            txt,
-            fontsize=8,
-            va="center",
-            ha="left",
-            bbox=dict(boxstyle="round", alpha=0.1),
+            p1 = (x0,      y0,      z0)
+            p2 = (x0 + dx, y0 + dy, z0)
+            p3 = (x0 + dx, y0 + dy, z0 + vane_height)
+            p4 = (x0,      y0,      z0 + vane_height)
+
+            poly = Poly3DCollection([[p1, p2, p3, p4]],
+                                    facecolor=vane_color,
+                                    edgecolor="k",
+                                    alpha=0.8)
+            ax.add_collection3d(poly)
+
+            area = vane_length * vane_height
+            vane_areas.append(area)
+
+        total_area = sum(vane_areas)
+
+        txt = (
+            f"{n_vanes} vane(s)\n"
+            f"L_rel = {L_rel:.2f}\n"
+            f"α = {alpha_attack:.1f}°\n"
+            f"Material = {material}\n"
+            f"Bevel = {bevel_angle:.1f}°\n"
+            f"Total area ≈ {total_area:.1f} m²"
         )
-    else:
         ax.text(
-            L_reach * 0.5,
-            B * 0.5,
-            "No vanes",
-            fontsize=10,
-            va="center",
-            ha="center",
-            bbox=dict(boxstyle="round", alpha=0.1),
+            L_reach * 0.02,
+            0.1 * B,
+            1.05 * h,
+            txt,
+            fontsize=9,
+            ha="left",
+            va="bottom",
         )
 
     ax.set_xlim(0, L_reach)
-    ax.set_ylim(0, B + 1)
-    ax.set_xlabel("Streamwise distance [schematic]")
-    ax.set_ylabel("Cross-stream [schematic]")
-    ax.set_title("Vane configuration (plan view)")
-    ax.set_aspect("auto")
-    ax.grid(True, linestyle="--", alpha=0.2)
+    ax.set_ylim(0, B)
+    ax.set_zlim(0, 1.2 * h)
+
+    ax.set_xlabel("Streamwise x [m]")
+    ax.set_ylabel("Cross-stream y [m]")
+    ax.set_zlabel("Depth z [m]")
+
+    ax.set_title("3D view of submerged vane configuration")
+
+    ax.view_init(elev=25, azim=-60)
+    ax.grid(True, alpha=0.2)
+
+    plt.tight_layout()
     return fig
 
 
@@ -602,7 +646,7 @@ def main():
     red_V = 1.0 - Vo / Vo_base
     red_tau = 1.0 - (Vo / Vo_base) ** 2
 
-    # -------- Layout: metrics --------
+    # -------- Metrics --------
     col1, col2, col3 = st.columns(3)
     col1.metric("Outer-bank velocity", f"{Vo:.2f} m/s")
     col2.metric("Velocity reduction vs no-vanes", f"{red_V * 100:.1f} %")
@@ -622,24 +666,16 @@ def main():
         nx=50,
         ny=25,
     )
-    # add a small "time" modulation
     U_mod = U * (1.0 + 0.15 * np.sin(2 * np.pi * time_phase))
     V_mod = Vlat * (1.0 + 0.15 * np.cos(2 * np.pi * time_phase))
 
-    # -------- Plots in three columns --------
+    # -------- Plots: 3D vane first, then cross-section, then velocity field --------
     c1, c2, c3 = st.columns(3)
 
     with c1:
-        fig_cs = plot_cross_section(B, h, Bi, Bm, Bo, scour_risk, use_vane, use_bevel)
-        st.pyplot(fig_cs)
-
-    with c2:
-        fig_vf = plot_velocity_field_fig(B, X, Y, U_mod, V_mod, Bi2, Bm2, Bo2)
-        st.pyplot(fig_vf)
-
-    with c3:
-        fig_plan = plot_vane_plan_view(
+        fig_3d = plot_vane_3d(
             B=B,
+            h=h,
             L_rel=L_rel,
             alpha_attack=alpha_attack,
             n_vanes=n_vanes,
@@ -647,7 +683,15 @@ def main():
             material=material,
             use_vane=use_vane,
         )
-        st.pyplot(fig_plan)
+        st.pyplot(fig_3d)
+
+    with c2:
+        fig_cs = plot_cross_section(B, h, Bi, Bm, Bo, scour_risk, use_vane, use_bevel)
+        st.pyplot(fig_cs)
+
+    with c3:
+        fig_vf = plot_velocity_field_fig(B, X, Y, U_mod, V_mod, Bi2, Bm2, Bo2)
+        st.pyplot(fig_vf)
 
     # -------- Text summary --------
     st.markdown("---")
@@ -668,3 +712,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
