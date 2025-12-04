@@ -436,7 +436,7 @@ def plot_vane_3d(
     if use_vane:
         # Outer zone width ~ 0.3 * B, on s'en sert pour calibrer la longueur
         Bo = 0.3 * B
-        vane_length = L_rel * Bo       # longueur dans le plan (x,y)
+        vane_length = 5*L_rel * Bo       # longueur dans le plan (x,y)
         vane_height = 0.7 * h         # hauteur verticale
         y_center = B * 0.5            # vanes au milieu du canal
 
