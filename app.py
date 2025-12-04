@@ -1,7 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.patches import Ellipse, Rectangle
 import streamlit as st
+from matplotlib.patches import Ellipse, Rectangle
 
 # ============================================================
 # 1. Core hydraulics: 3-zone bend model
@@ -27,16 +27,7 @@ def compute_outer_velocity(
 ):
     """
     Simple 3-zone bend model for a rectangular cross-section.
-
-    B  : total width [m]
-    h  : depth [m]
-    S  : slope [-] (not directly used here)
-    n_*: Manning roughness in inner/mid/outer zones
-    Q  : total discharge [m^3/s]
-    alpha : amplification factor for outer-bank velocity (bend effect)
-    gamma : fraction of outer-zone discharge diverted to mid-channel by vanes
     """
-
     # Split width into 3 zones: inner, mid, outer
     Bi = 0.3 * B
     Bm = 0.4 * B
@@ -91,8 +82,6 @@ def compute_outer_velocity(
 def material_properties(material):
     """
     Returns (n_multiplier, scour_multiplier_base) for a given vane material.
-
-    material: "steel", "concrete", "wood", "rock"
     """
     table = {
         "steel":    (0.95, 0.9),   # smooth
@@ -116,35 +105,26 @@ def gamma_from_geometry(
 ):
     """
     Compute gamma (fraction of outer-zone discharge diverted to mid-channel)
-    as a function of:
-    - L_rel: relative vane length (0–1) vs outer-zone width
-    - alpha_attack_deg: attack angle (plan view) [deg]
-    - n_vanes: nb of vanes
-    - is_array: bool
-    - bevel_angle_deg: bevel angle on leading edge [deg]
-    - material: string ("steel", "concrete", "wood", "rock")
-
-    gamma_base: base deflection efficiency for a reference vane.
+    from vane geometry and material.
     """
-
     # Length factor: more length → more interaction with outer flow
     L_ref = 0.5
     f_L = 1.0 + 0.6 * (L_rel - L_ref)
     f_L = np.clip(f_L, 0.3, 1.5)
 
-    # Attack angle factor: up to ~25° increases lateral deflection
+    # Attack angle factor
     alpha_ref = 20.0
     f_alpha = 1.0 + 0.5 * ((alpha_attack_deg - alpha_ref) / alpha_ref)
     f_alpha = np.clip(f_alpha, 0.5, 1.5)
 
-    # Array effect: more vanes = more global deflection (up to a limit)
+    # Array effect
     if is_array:
-        f_array = 1.0 + 0.1 * (n_vanes - 1)  # +10% per vane beyond the first
+        f_array = 1.0 + 0.1 * (n_vanes - 1)
     else:
         f_array = 1.0
     f_array = np.clip(f_array, 1.0, 1.5)
 
-    # Bevel angle: bevelled edge can slightly improve guidance of flow
+    # Bevel effect on guidance
     if bevel_angle_deg is None or bevel_angle_deg <= 0:
         f_bevel_geom = 1.0
     else:
@@ -152,7 +132,7 @@ def gamma_from_geometry(
         f_bevel_geom = 1.0 + 0.2 * ((bevel_angle_deg - bevel_ref) / bevel_ref)
         f_bevel_geom = np.clip(f_bevel_geom, 0.8, 1.2)
 
-    # Material may also influence effective gamma via friction (small effect)
+    # Material effect
     n_mult_mat, _ = material_properties(material)
     f_mat_gamma = 1.0 - 0.2 * (n_mult_mat - 1.0)
     f_mat_gamma = np.clip(f_mat_gamma, 0.8, 1.1)
@@ -171,13 +151,7 @@ def local_scour_risk_from_geometry(
 ):
     """
     Relative local scour risk indicator around the vanes.
-
-    - Longer vane + higher attack angle → more vortices → more scour
-    - More vanes → more local scour spots
-    - Bevel reduces scour
-    - Rough materials (rock) → more turbulent structures → more local scour
     """
-
     # Base risk for a "classical" single non-bevelled concrete vane
     base_risk = 0.8
 
@@ -215,16 +189,15 @@ def local_scour_risk_from_geometry(
 # 3. Pseudo-CFD field builder
 # ============================================================
 
-def build_velocity_field(B, h, Q, n0, alpha_bend, gamma, n_o_eff, nx=40, ny=15):
+def build_velocity_field(B, h, Q, n0, alpha_bend, gamma, n_o_eff, nx=40, ny=25):
     """
-    Build a simple 2D velocity field in a bend reach using 3-zone velocities.
+    Build a 2D velocity field in a bend reach using 3-zone velocities.
     """
     L_reach = 100.0  # [m] schematic length
     x = np.linspace(0, L_reach, nx)
     y = np.linspace(0, B, ny)
     X, Y = np.meshgrid(x, y)
 
-    # Recompute hydraulics for given gamma + n_o_eff
     hydro = compute_outer_velocity(
         B=B,
         h=h,
@@ -240,8 +213,8 @@ def build_velocity_field(B, h, Q, n0, alpha_bend, gamma, n_o_eff, nx=40, ny=15):
     (Vi, Vm, Vo) = hydro["V_after"]
     Vo_bend = hydro["Vo_bend"]
 
-    U = np.zeros_like(X)    # streamwise
-    Vlat = np.zeros_like(X) # lateral
+    U = np.zeros_like(X)
+    Vlat = np.zeros_like(X)
 
     for j in range(ny):
         yj = y[j]
@@ -252,7 +225,6 @@ def build_velocity_field(B, h, Q, n0, alpha_bend, gamma, n_o_eff, nx=40, ny=15):
         else:
             U[j, :] = Vo_bend
 
-    # lateral component in vane zone
     vane_x_start = 0.4 * L_reach
     vane_x_end = 0.7 * L_reach
 
@@ -266,7 +238,224 @@ def build_velocity_field(B, h, Q, n0, alpha_bend, gamma, n_o_eff, nx=40, ny=15):
 
 
 # ============================================================
-# 4. Streamlit App
+# 4. Plot helpers (cross-section, velocity field, vane geometry)
+# ============================================================
+
+def plot_cross_section(B, h, Bi, Bm, Bo, scour_risk, use_vane, use_bevel):
+    fig, ax = plt.subplots(figsize=(5, 3))
+
+    # Draw zones
+    ax.add_patch(Rectangle((0, 0), Bi, h, fill=False))
+    ax.add_patch(Rectangle((Bi, 0), Bm, h, fill=False))
+    ax.add_patch(Rectangle((Bi + Bm, 0), Bo, h, fill=False))
+
+    ax.text(Bi / 2, h * 0.5, "Inner", ha="center", va="center", fontsize=8)
+    ax.text(Bi + Bm / 2, h * 0.5, "Mid", ha="center", va="center", fontsize=8)
+    ax.text(Bi + Bm + Bo / 2, h * 0.5, "Outer bank", ha="center", va="center", fontsize=8)
+
+    # Flow direction
+    ax.annotate(
+        "",
+        xy=(B * 0.9, h + 0.2),
+        xytext=(B * 0.1, h + 0.2),
+        arrowprops=dict(arrowstyle="->", linewidth=1.3),
+    )
+    ax.text(B * 0.5, h + 0.25, "Main flow", ha="center", va="bottom", fontsize=8)
+
+    # Vane position (schematic)
+    vane_x = Bi + Bm + Bo * 0.3
+    ax.plot([vane_x, vane_x], [0, h * 0.4], lw=3)
+    vane_label = "Vanes"
+    if use_bevel:
+        vane_label += "\n(bevelled)"
+    ax.text(vane_x, h * 0.45, vane_label, ha="center", va="bottom", fontsize=8)
+
+    # Elliptic red scour zone near vane, size ∝ scour_risk
+    if use_vane and scour_risk > 0:
+        max_width = 0.25 * Bo
+        max_height = 0.6 * h
+        w = max_width * min(1.0, scour_risk)
+        h_e = max_height * min(1.0, scour_risk)
+        ell = Ellipse(
+            (Bi + Bm + 0.75 * Bo, h * 0.15),
+            width=w,
+            height=h_e,
+            angle=0,
+            color="red",
+            alpha=0.35,
+        )
+        ax.add_patch(ell)
+        ax.text(
+            Bi + Bm + 0.75 * Bo,
+            h * 0.15 + h_e * 0.6,
+            "Local scour zone",
+            ha="center",
+            va="bottom",
+            fontsize=8,
+            color="red",
+        )
+
+    ax.set_xlim(-1, B + 1)
+    ax.set_ylim(-0.2, h + 0.8)
+    ax.set_xlabel("Cross-section width [schematic]")
+    ax.set_ylabel("Depth [schematic]")
+    ax.set_title("Cross-section & local scour footprint")
+    ax.set_aspect("equal", adjustable="box")
+    ax.grid(False)
+    return fig
+
+
+def plot_velocity_field_fig(B, X, Y, U_mod, V_mod, Bi, Bm, Bo):
+    L_reach = X.max()
+    speed = np.sqrt(U_mod ** 2 + V_mod ** 2)
+
+    fig, ax = plt.subplots(figsize=(6, 3))
+
+    # Background speed map
+    im = ax.imshow(
+        speed,
+        extent=[0, L_reach, 0, B],
+        origin="lower",
+        aspect="auto",
+    )
+    fig.colorbar(im, ax=ax, label="Speed [relative]")
+
+    # Overlay quiver (sparser)
+    skip = (slice(None, None, 2), slice(None, None, 3))
+    ax.quiver(
+        X[skip],
+        Y[skip],
+        U_mod[skip],
+        V_mod[skip],
+        scale=50,
+        alpha=0.7,
+    )
+
+    # Outer bank division line
+    ax.axhline(Bi + Bm, color="k", linestyle="--", alpha=0.4)
+    ax.text(2, Bi + Bm + 0.5, "Outer bank zone", va="bottom", fontsize=8)
+
+    # Vane zone
+    vane_x_start = 0.4 * L_reach
+    vane_x_end = 0.7 * L_reach
+    ax.axvspan(vane_x_start, vane_x_end, color="white", alpha=0.08)
+    ax.text(
+        (vane_x_start + vane_x_end) / 2,
+        B - 0.5,
+        "Vane reach",
+        ha="center",
+        fontsize=8,
+    )
+
+    ax.set_title("Pseudo-velocity field in the bend (plan view)")
+    ax.set_xlabel("Streamwise distance [schematic]")
+    ax.set_ylabel("Channel width [schematic]")
+    ax.grid(True, linestyle="--", alpha=0.2)
+    return fig
+
+
+def plot_vane_plan_view(B, L_rel, alpha_attack, n_vanes, bevel_angle, material, use_vane):
+    """
+    Plan view of outer bank with vanes (array vs single, bevel).
+    """
+    L_reach = 100.0
+    fig, ax = plt.subplots(figsize=(5, 3))
+
+    # Outer bank line
+    outer_y = B
+    ax.plot([0, L_reach], [outer_y, outer_y], "k-", lw=2)
+    ax.text(L_reach * 0.02, outer_y + 0.3, "Outer bank", va="bottom", fontsize=8)
+
+    # Channel interior
+    ax.fill_between([0, L_reach], 0, outer_y, alpha=0.05)
+
+    # Main flow direction arrow
+    ax.annotate(
+        "",
+        xy=(L_reach * 0.9, B * 0.1),
+        xytext=(L_reach * 0.1, B * 0.1),
+        arrowprops=dict(arrowstyle="->", linewidth=1.5),
+    )
+    ax.text(L_reach * 0.5, B * 0.12, "Main flow", ha="center", va="bottom", fontsize=8)
+
+    if use_vane:
+        # Material color
+        color_map = {
+            "steel": "grey",
+            "concrete": "black",
+            "wood": "saddlebrown",
+            "rock": "dimgray",
+        }
+        vane_color = color_map.get(material, "black")
+
+        # Outer-zone width (schematic) = 0.3 * B
+        Bo = 0.3 * B
+        vane_length = L_rel * Bo
+
+        # Positions of vanes along the bank
+        xs = np.linspace(L_reach * 0.45, L_reach * 0.8, n_vanes)
+
+        theta = np.deg2rad(alpha_attack)
+        dx = vane_length * np.cos(theta)
+        dy = -vane_length * np.sin(theta)  # into the channel
+
+        for x0 in xs:
+            y0 = outer_y
+            x1 = x0 + dx
+            y1 = y0 + dy
+            ax.plot([x0, x1], [y0, y1], color=vane_color, lw=3)
+
+            # Bevel illustration: small short line at outer tip
+            if bevel_angle and bevel_angle > 0:
+                phi = np.deg2rad(alpha_attack + 90)
+                bx0, by0 = x0, y0
+                bdx = 0.2 * vane_length * np.cos(phi)
+                bdy = 0.2 * vane_length * np.sin(phi)
+                ax.plot(
+                    [bx0, bx0 + bdx],
+                    [by0, by0 + bdy],
+                    color=vane_color,
+                    lw=1,
+                    alpha=0.7,
+                )
+
+        # Legend-like annotation
+        txt = f"{n_vanes} vane(s)\nL_rel={L_rel:.2f}, α={alpha_attack:.0f}°"
+        if bevel_angle and bevel_angle > 0:
+            txt += f"\nBevel={bevel_angle:.0f}°"
+        txt += f"\nMaterial={material}"
+        ax.text(
+            L_reach * 0.05,
+            B * 0.5,
+            txt,
+            fontsize=8,
+            va="center",
+            ha="left",
+            bbox=dict(boxstyle="round", alpha=0.1),
+        )
+    else:
+        ax.text(
+            L_reach * 0.5,
+            B * 0.5,
+            "No vanes",
+            fontsize=10,
+            va="center",
+            ha="center",
+            bbox=dict(boxstyle="round", alpha=0.1),
+        )
+
+    ax.set_xlim(0, L_reach)
+    ax.set_ylim(0, B + 1)
+    ax.set_xlabel("Streamwise distance [schematic]")
+    ax.set_ylabel("Cross-stream [schematic]")
+    ax.set_title("Vane configuration (plan view)")
+    ax.set_aspect("auto")
+    ax.grid(True, linestyle="--", alpha=0.2)
+    return fig
+
+
+# ============================================================
+# 5. Streamlit App
 # ============================================================
 
 def main():
@@ -274,8 +463,8 @@ def main():
 
     st.title("🌊 Submerged Vane Bend Lab")
     st.markdown(
-        "Interactive toy model for **river bend hydraulics** with "
-        "submerged vanes, bevels, materials and local scour risk."
+        "Interactive toy model for **river bend hydraulics** with submerged vanes,\n"
+        "materials, bevels, arrays, and local scour risk."
     )
 
     # -------- Sidebar controls --------
@@ -409,147 +598,60 @@ def main():
     )
     Vo = res["Vo_bend"]
     (Bi, Bm, Bo) = res["zones_width"]
-    (Vi, Vm, Vo_inner) = res["V_after"]
 
     red_V = 1.0 - Vo / Vo_base
     red_tau = 1.0 - (Vo / Vo_base) ** 2
 
-    # -------- Layout: metrics + plots --------
+    # -------- Layout: metrics --------
     col1, col2, col3 = st.columns(3)
-
-    col1.metric("Outer-bank velocity (with vanes)", f"{Vo:.2f} m/s")
+    col1.metric("Outer-bank velocity", f"{Vo:.2f} m/s")
     col2.metric("Velocity reduction vs no-vanes", f"{red_V * 100:.1f} %")
     col3.metric("Local scour risk (relative)", f"{scour_risk:.2f}")
 
     st.markdown("---")
 
-    col_left, col_right = st.columns(2)
+    # -------- Build velocity field --------
+    X, Y, U, Vlat, (Bi2, Bm2, Bo2) = build_velocity_field(
+        B=B,
+        h=h,
+        Q=Q,
+        n0=n0,
+        alpha_bend=alpha_bend,
+        gamma=gamma,
+        n_o_eff=n_o_eff,
+        nx=50,
+        ny=25,
+    )
+    # add a small "time" modulation
+    U_mod = U * (1.0 + 0.15 * np.sin(2 * np.pi * time_phase))
+    V_mod = Vlat * (1.0 + 0.15 * np.cos(2 * np.pi * time_phase))
 
-    # ===== Left: cross-section schematic with red ellipse for scour =====
-    with col_left:
-        fig, ax = plt.subplots(figsize=(6, 3))
+    # -------- Plots in three columns --------
+    c1, c2, c3 = st.columns(3)
 
-        # Draw zones
-        ax.add_patch(Rectangle((0, 0), Bi, h, fill=False))
-        ax.add_patch(Rectangle((Bi, 0), Bm, h, fill=False))
-        ax.add_patch(Rectangle((Bi + Bm, 0), Bo, h, fill=False))
+    with c1:
+        fig_cs = plot_cross_section(B, h, Bi, Bm, Bo, scour_risk, use_vane, use_bevel)
+        st.pyplot(fig_cs)
 
-        ax.text(Bi / 2, h * 0.5, "Inner", ha="center", va="center", fontsize=9)
-        ax.text(Bi + Bm / 2, h * 0.5, "Mid", ha="center", va="center", fontsize=9)
-        ax.text(Bi + Bm + Bo / 2, h * 0.5, "Outer bank", ha="center", va="center", fontsize=9)
+    with c2:
+        fig_vf = plot_velocity_field_fig(B, X, Y, U_mod, V_mod, Bi2, Bm2, Bo2)
+        st.pyplot(fig_vf)
 
-        # Flow direction
-        ax.annotate(
-            "",
-            xy=(B * 0.9, h + 0.2),
-            xytext=(B * 0.1, h + 0.2),
-            arrowprops=dict(arrowstyle="->", linewidth=1.3),
-        )
-        ax.text(B * 0.5, h + 0.25, "Main flow", ha="center", va="bottom", fontsize=9)
-
-        # Vane position
-        vane_x = Bi + Bm + Bo * 0.3
-        ax.plot([vane_x, vane_x], [0, h * 0.4], lw=3)
-        vane_label = "Vanes"
-        if use_bevel:
-            vane_label += "\n(bevelled)"
-        ax.text(vane_x, h * 0.45, vane_label, ha="center", va="bottom", fontsize=8)
-
-        # Elliptic red scour zone near vane, size ∝ scour_risk
-        if use_vane and scour_risk > 0:
-            max_width = 0.25 * Bo
-            max_height = 0.6 * h
-            w = max_width * min(1.0, scour_risk)
-            h_e = max_height * min(1.0, scour_risk)
-            ell = Ellipse(
-                (Bi + Bm + 0.75 * Bo, h * 0.15),
-                width=w,
-                height=h_e,
-                angle=0,
-                color="red",
-                alpha=0.35,
-            )
-            ax.add_patch(ell)
-            ax.text(
-                Bi + Bm + 0.75 * Bo,
-                h * 0.15 + h_e * 0.6,
-                "Local scour zone",
-                ha="center",
-                va="bottom",
-                fontsize=8,
-                color="red",
-            )
-
-        ax.set_xlim(-1, B + 1)
-        ax.set_ylim(-0.2, h + 0.8)
-        ax.set_xlabel("Cross-section width [schematic]")
-        ax.set_ylabel("Depth [schematic]")
-        ax.set_title("Cross-section & local scour footprint")
-        ax.set_aspect("equal", adjustable="box")
-        ax.grid(False)
-
-        st.pyplot(fig)
-
-    # ===== Right: pseudo-CFD velocity field =====
-    with col_right:
-        X, Y, U, Vlat, (Bi2, Bm2, Bo2) = build_velocity_field(
+    with c3:
+        fig_plan = plot_vane_plan_view(
             B=B,
-            h=h,
-            Q=Q,
-            n0=n0,
-            alpha_bend=alpha_bend,
-            gamma=gamma,
-            n_o_eff=n_o_eff,
-            nx=40,
-            ny=20,
+            L_rel=L_rel,
+            alpha_attack=alpha_attack,
+            n_vanes=n_vanes,
+            bevel_angle=bevel_angle,
+            material=material,
+            use_vane=use_vane,
         )
+        st.pyplot(fig_plan)
 
-        # add a small "time" modulation
-        U_mod = U * (1.0 + 0.15 * np.sin(2 * np.pi * time_phase))
-        V_mod = Vlat * (1.0 + 0.15 * np.cos(2 * np.pi * time_phase))
-        speed = np.sqrt(U_mod ** 2 + V_mod ** 2)
-
-        fig2, ax2 = plt.subplots(figsize=(7, 3))
-        skip = (slice(None, None, 2), slice(None, None, 2))
-
-        q = ax2.quiver(
-            X[skip],
-            Y[skip],
-            U_mod[skip],
-            V_mod[skip],
-            speed[skip],
-            scale=40,
-        )
-
-        ax2.set_title("Pseudo-velocity field in the bend (plan view)")
-        ax2.set_xlabel("Streamwise distance [schematic]")
-        ax2.set_ylabel("Channel width [schematic]")
-
-        # Outer bank division line
-        ax2.axhline(Bi2 + Bm2, color="k", linestyle="--", alpha=0.4)
-        ax2.text(5, Bi2 + Bm2 + 0.5, "Outer bank zone", va="bottom", fontsize=8)
-
-        # Vane zone
-        L_reach = 100.0
-        vane_x_start = 0.4 * L_reach
-        vane_x_end = 0.7 * L_reach
-        ax2.axvspan(vane_x_start, vane_x_end, color="grey", alpha=0.1)
-        ax2.text(
-            (vane_x_start + vane_x_end) / 2,
-            B - 0.5,
-            "Vane reach",
-            ha="center",
-            fontsize=8,
-        )
-
-        fig2.colorbar(q, ax=ax2, label="Speed [relative]")
-        ax2.grid(True, linestyle="--", alpha=0.3)
-        st.pyplot(fig2)
-
-    # --------- Text summary ---------
+    # -------- Text summary --------
     st.markdown("---")
     st.subheader("Configuration summary")
-
     st.write(
         f"- **Bend type**: {bend_choice}  \n"
         f"- **B = {B:.1f} m**, **h = {h:.1f} m**, **Q = {Q:.1f} m³/s**, **α = {alpha_bend:.2f}**  \n"
