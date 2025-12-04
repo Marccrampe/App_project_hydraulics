@@ -372,10 +372,12 @@ def plot_vane_3d(
     use_vane=True,
 ):
     """
-    3D visualisation of the channel, outer bank and submerged vanes.
-    - vanes au milieu (y ≈ B/2)
-    - alignées avec le flow (le long de x)
-    - bevel visible via top edge inclinée
+    3D visualisation of the channel and submerged vanes.
+
+    - vanes au milieu du canal (y ~ B/2)
+    - flow vers +x
+    - angle d'attaque alpha_attack = angle entre la vane et la direction du flow (plan vue)
+    - bevel_angle = différence de hauteur entre amont et aval de la vane
     """
 
     L_reach = 40.0  # length of the plotted reach in x
@@ -411,7 +413,7 @@ def plot_vane_3d(
     surface = Poly3DCollection(surface_verts, alpha=0.05, facecolor="blue")
     ax.add_collection3d(surface)
 
-    # --- Outer bank line (y = B) for contexte ---
+    # --- Outer bank line (y = B) pour le contexte ---
     ax.plot([0, L_reach], [B, B], [0, 0], "k-", lw=2)
     ax.text(L_reach * 0.05, B + 0.2, 0.0, "Outer bank", fontsize=9)
 
@@ -434,36 +436,40 @@ def plot_vane_3d(
     if use_vane:
         # Outer zone width ~ 0.3 * B, on s'en sert pour calibrer la longueur
         Bo = 0.3 * B
-        vane_length = L_rel * Bo       # along x (flow)
-        vane_height = 0.7 * h         # vertical height
-        y0 = B * 0.5                  # milieu du canal
+        vane_length = L_rel * Bo       # longueur dans le plan (x,y)
+        vane_height = 0.7 * h         # hauteur verticale
+        y_center = B * 0.5            # vanes au milieu du canal
+
+        # angle d’attaque en rad
+        phi = np.deg2rad(alpha_attack)
 
         # positions en x centrées dans le reach
         xs = np.linspace(L_reach * 0.3, L_reach * 0.7, n_vanes)
         vane_areas = []
 
+        # bevel – différence de hauteur entre les deux extrémités
         theta_b = np.deg2rad(bevel_angle)
-        # différence de hauteur due au bevel (juste pour viz, facteur 0.6)
         dz_bevel = vane_height * 0.6 * np.sin(theta_b)
+
+        first_base_for_alpha = None
 
         for x0 in xs:
             z0 = 0.0
 
-            # base line (en x, alignée avec le flow)
-            x1 = x0
-            x2 = x0 + vane_length
+            # direction de la vane dans le plan (angle par rapport au flow x)
+            dx = vane_length * np.cos(phi)
+            dy = vane_length * np.sin(phi)
 
             # bas du panneau
-            p1 = (x1, y0, z0)
-            p2 = (x2, y0, z0)
+            p1 = (x0,          y_center,          z0)  # amont bas
+            p2 = (x0 + dx,     y_center + dy,     z0)  # aval bas
 
-            # haut du panneau : on incline le bord amont/aval selon le bevel
-            # ici: amont = x1, aval = x2 (tu peux inverser si besoin)
-            z1_top = vane_height + dz_bevel      # côté amont plus haut
-            z2_top = vane_height                 # côté aval
+            # haut du panneau (amont plus haut si bevel>0)
+            z1_top = vane_height + dz_bevel  # amont haut
+            z2_top = vane_height             # aval haut
 
-            p3 = (x2, y0, z2_top)  # aval haut
-            p4 = (x1, y0, z1_top)  # amont haut
+            p4 = (x0,          y_center,          z1_top)  # amont haut
+            p3 = (x0 + dx,     y_center + dy,     z2_top)  # aval haut
 
             poly = Poly3DCollection([[p1, p2, p3, p4]],
                                     facecolor=vane_color,
@@ -474,11 +480,49 @@ def plot_vane_3d(
             area = vane_length * vane_height
             vane_areas.append(area)
 
+            if first_base_for_alpha is None:
+                first_base_for_alpha = (x0, y_center)
+
         total_area = sum(vane_areas)
+
+        # --- petit dessin de l’angle d’attaque α dans le plan (au sol) ---
+        if first_base_for_alpha is not None:
+            bx, by = first_base_for_alpha
+            z_alpha = 0.05 * h
+            r = 0.3 * vane_length  # longueur des segments de visualisation
+
+            # segment dans la direction du flow (x)
+            ax.plot(
+                [bx, bx + r],
+                [by, by],
+                [z_alpha, z_alpha],
+                color="k",
+                lw=2,
+            )
+
+            # segment dans la direction de la vane
+            ax.plot(
+                [bx, bx + r * np.cos(phi)],
+                [by, by + r * np.sin(phi)],
+                [z_alpha, z_alpha],
+                color=vane_color,
+                lw=2,
+            )
+
+            ax.text(
+                bx + 0.6 * r,
+                by + 0.15 * r,
+                z_alpha + 0.02 * h,
+                f"α = {alpha_attack:.0f}°",
+                fontsize=9,
+                ha="left",
+                va="bottom",
+            )
 
         txt = (
             f"{n_vanes} vane(s)\n"
             f"L_rel = {L_rel:.2f}\n"
+            f"α = {alpha_attack:.1f}°\n"
             f"Bevel θ = {bevel_angle:.1f}°\n"
             f"Material = {material}\n"
             f"Total area ≈ {total_area:.1f} m²"
@@ -501,7 +545,7 @@ def plot_vane_3d(
     ax.set_ylabel("Cross-stream y [m]")
     ax.set_zlabel("Depth z [m]")
 
-    ax.set_title("3D view of submerged vane configuration (aligned with flow)")
+    ax.set_title("3D view of submerged vane configuration (α & bevel visible)")
 
     ax.view_init(elev=25, azim=-60)
     ax.grid(True, alpha=0.2)
