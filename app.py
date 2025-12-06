@@ -276,7 +276,8 @@ def plot_scour_plan_view(
     Lx = 20.0
     Ly = 4.0
 
-    fig, ax = plt.subplots(figsize=(6.0, 6.0))
+    # *** JUSTE AGRANDI ICI ***
+    fig, ax = plt.subplots(figsize=(8.0, 8.0))
 
     # Channel rectangle
     ax.add_patch(Rectangle((0, 0), Lx, Ly, fill=False))
