@@ -324,10 +324,11 @@ def plot_velocity_field_fig(
     - Haut : flow WITHOUT vanes
     - Bas  : flow WITH vanes (vitesse réduite + déviation latérale)
 
-    L'effet dépend de L_rel, alpha_attack, n_vanes, matériau, gamma.
+    On représente un ARRAY de n_vanes ; l'influence hydraulique totale est la
+    somme des contributions de chaque vane (noyau gaussien orienté).
     """
 
-    # Domaine
+    # -------- Domaine schématique --------
     Lx = 20.0
     Ly = 4.0
     nx, ny = 250, 80
@@ -335,51 +336,59 @@ def plot_velocity_field_fig(
     y = np.linspace(0, Ly, ny)
     X, Y = np.meshgrid(x, y)
 
-    # Écoulement de base
+    # -------- Écoulement de base --------
     U0 = 1.0
     beta = 0.3
     U_base = U0 * (1 - beta * (Y - Ly / 2.0) ** 2)
     V_base = np.zeros_like(U_base)
     speed_base = np.sqrt(U_base**2 + V_base**2)
 
-    # Géométrie des vanes
-    xv = 0.5 * Lx
+    # -------- Géométrie des vanes --------
     yv = Ly / 2.0
+    xs = np.linspace(0.35 * Lx, 0.65 * Lx, n_vanes)  # positions x des vanes
 
     Bo_phys = 0.3 * B
     scale = Ly / B
-    L_vane_single = L_rel * Bo_phys * scale
+    L_geom = L_rel * Bo_phys * scale  # longueur géométrique d'une vane
 
-    L_eff = L_vane_single * (1.0 + 0.3 * (n_vanes - 1))
+    # Longueur d'influence (augmente avec n_vanes)
+    L_eff = L_geom * (1.0 + 0.3 * (n_vanes - 1))
     L_eff = np.clip(L_eff, 0.2, 0.8 * Ly)
 
     theta = np.deg2rad(alpha_attack)
 
-    dx = X - xv
-    dy = Y - yv
-    s = dx * np.cos(theta) + dy * np.sin(theta)
-    n = -dx * np.sin(theta) + dy * np.cos(theta)
-
+    # -------- Noyau total G (somme des contributions) --------
+    G_total = np.zeros_like(X)
     sigma_s = L_eff / 2.0
     sigma_n = 0.35
-    G = np.exp(-((s**2) / (2 * sigma_s**2) + (n**2) / (2 * sigma_n**2)))
-    G = G * (s > -0.3 * L_eff)
 
-    # Effets matériau / géométrie
+    for xv in xs:
+        dx = X - xv
+        dy = Y - yv
+        s = dx * np.cos(theta) + dy * np.sin(theta)
+        n = -dx * np.sin(theta) + dy * np.cos(theta)
+
+        Gk = np.exp(-((s**2) / (2 * sigma_s**2) + (n**2) / (2 * sigma_n**2)))
+        Gk = Gk * (s > -0.3 * L_eff)   # surtout en aval de chaque vane
+        G_total += Gk
+
+    G_total = np.clip(G_total, 0.0, 2.0)
+
+    # -------- Effets matériau / géométrie sur l'intensité --------
     n_mult, scour_mult = material_properties(material)
 
     A_base = 0.3
-    A = A_base + 0.9 * gamma + 0.1 * (n_vanes - 1)
+    A = A_base + 0.9 * gamma + 0.05 * (n_vanes - 1)
     A *= 1.0 + 0.15 * (n_mult - 1.0)
     A = np.clip(A, 0.1, 0.95)
 
     B_base = 0.4
-    B_lat = B_base + 0.4 * gamma + 0.25 * (n_mult - 1.0)
+    B_lat = B_base + 0.4 * gamma + 0.2 * (n_mult - 1.0)
     B_lat = np.clip(B_lat, 0.1, 1.3)
 
-    # Champ avec vane(s)
-    U = U_base * (1 - A * G)
-    V = V_base + B_lat * np.tanh(n / sigma_n) * G
+    # -------- Champ AVEC array --------
+    U = U_base * (1 - A * G_total)
+    V = V_base + B_lat * np.tanh(G_total) * G_total
 
     # petite "animation"
     U = U * (1.0 + 0.15 * np.sin(2 * np.pi * time_phase))
@@ -387,16 +396,20 @@ def plot_velocity_field_fig(
 
     speed_vane = np.sqrt(U**2 + V**2)
 
-    # Segment de l'array
-    halfL = L_eff / 2.0
-    x1 = xv - halfL * np.cos(theta)
-    y1 = yv - halfL * np.sin(theta)
-    x2 = xv + halfL * np.cos(theta)
-    y2 = yv + halfL * np.sin(theta)
+    # Segments pour dessiner chaque vane
+    vane_segments = []
+    halfL_geom = L_geom / 2.0
+    for xv in xs:
+        x1 = xv - halfL_geom * np.cos(theta)
+        y1 = yv - halfL_geom * np.sin(theta)
+        x2 = xv + halfL_geom * np.cos(theta)
+        y2 = yv + halfL_geom * np.sin(theta)
+        vane_segments.append(((x1, y1), (x2, y2)))
 
+    # -------- Plots --------
     fig, axes = plt.subplots(2, 1, figsize=(6, 8), sharex=True, sharey=True)
 
-    # Sans vanes
+    # 1) Sans vanes
     ax_top = axes[0]
     cf1 = ax_top.contourf(X, Y, speed_base, levels=40, cmap="viridis")
     plt.colorbar(cf1, ax=ax_top, label="|U| (m/s)")
@@ -406,23 +419,25 @@ def plot_velocity_field_fig(
     ax_top.set_xlim(0, Lx)
     ax_top.set_ylim(0, Ly)
 
-    # Avec vanes
+    # 2) Avec array
     ax_bot = axes[1]
     cf2 = ax_bot.contourf(X, Y, speed_vane, levels=40, cmap="viridis")
     plt.colorbar(cf2, ax=ax_bot, label="|U| (m/s)")
     ax_bot.streamplot(X, Y, U, V, density=2, color="k", linewidth=0.6)
 
-    ax_bot.plot(
-        [x1, x2],
-        [y1, y2],
-        color="red",
-        linewidth=4,
-        solid_capstyle="round",
-        label="Submerged vane array",
-    )
+    for (p1, p2) in vane_segments:
+        ax_bot.plot(
+            [p1[0], p2[0]],
+            [p1[1], p2[1]],
+            color="red",
+            linewidth=4,
+            solid_capstyle="round",
+        )
+
+    ax_bot.plot([], [], color="red", linewidth=4, label="Submerged vane array")
     ax_bot.legend(loc="upper right")
 
-    ax_bot.set_title("Flow WITH submerged vanes\n(reduced velocity + lateral deviation)")
+    ax_bot.set_title("Flow WITH submerged vane array\n(reduced velocity + lateral deviation)")
     ax_bot.set_xlabel("x (longitudinal)")
     ax_bot.set_ylabel("y (transversal)")
     ax_bot.set_xlim(0, Lx)
@@ -499,6 +514,7 @@ def plot_vane_3d(
     )
 
     if use_vane:
+        # long > high
         vane_height = 0.3 * h
         vane_length = 2.0 * h
         y_center = B * 0.5
@@ -544,7 +560,7 @@ def plot_vane_3d(
 
         total_area = sum(vane_areas)
 
-        # Small 2D angle indicator
+        # 2D angle indicator
         if first_base_for_alpha is not None:
             bx, by = first_base_for_alpha
             z_alpha = 0.05 * h
