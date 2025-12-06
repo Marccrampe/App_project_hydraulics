@@ -109,9 +109,6 @@ def gamma_from_geometry(
     """
     Compute gamma (fraction of outer-zone discharge diverted to mid-channel)
     from vane geometry and material.
-
-    Ici on interprète le bevel comme un *ajout de matériau* côté amont → aire
-    efficace un peu plus grande → déviation légèrement plus forte.
     """
 
     # Length factor
@@ -131,10 +128,11 @@ def gamma_from_geometry(
         f_array = 1.0
     f_array = np.clip(f_array, 1.0, 1.5)
 
-    # Bevel effect as extra effective area (0° → 1.0 ; 70° → 1.25)
+    # Bevel effect (shape + flow attachment)
     if bevel_angle_deg is None or bevel_angle_deg <= 0:
         f_bevel_geom = 1.0
     else:
+        # 0° -> 1.0 ; 70° -> 1.25
         bevel_norm = np.clip(bevel_angle_deg / 70.0, 0.0, 1.0)
         f_bevel_geom = 1.0 + 0.25 * bevel_norm
 
@@ -318,14 +316,9 @@ def plot_velocity_field_fig(
     scour_risk,
 ):
     """
-    Plan view 'pseudo-CFD':
-
-    - Écoulement de base : profil parabolique en y
-    - Array de vanes alignées avec l’angle d’attaque
-    - U réduit + V latéral local autour des vanes (jet dévié)
+    Plan view 'pseudo-CFD'
     """
 
-    # Domaine schématique
     Lx = 20.0
     Ly = 4.0
     nx, ny = 250, 80
@@ -333,13 +326,11 @@ def plot_velocity_field_fig(
     y = np.linspace(0, Ly, ny)
     X, Y = np.meshgrid(x, y)
 
-    # Écoulement de base
     U0 = 1.0
     beta = 0.3
     U_base = U0 * (1 - beta * (Y - Ly / 2.0) ** 2)
     V_base = np.zeros_like(U_base)
 
-    # Vane array geometry
     x0 = 0.5 * Lx
     y_positions = np.linspace(0.55 * Ly, 0.9 * Ly, n_vanes)
 
@@ -349,7 +340,6 @@ def plot_velocity_field_fig(
 
     theta = np.deg2rad(alpha_attack)
 
-    # Intensités
     n_mult, _ = material_properties(material)
 
     A_base = 0.25
@@ -362,7 +352,6 @@ def plot_velocity_field_fig(
     B_lat *= 1.0 + 0.2 * (n_mult - 1.0)
     B_lat = np.clip(B_lat, 0.1, 1.0)
 
-    # Construction du champ perturbé
     G_total = np.zeros_like(X)
     V = np.zeros_like(X)
 
@@ -396,13 +385,11 @@ def plot_velocity_field_fig(
 
     U = U_base * (1 - A * G_total)
 
-    # pseudo-animation
     U = U * (1.0 + 0.15 * np.sin(2 * np.pi * time_phase))
     V = V * (1.0 + 0.15 * np.cos(2 * np.pi * time_phase))
 
     speed_vane = np.sqrt(U**2 + V**2)
 
-    # Plot
     fig, ax = plt.subplots(figsize=(6, 5))
 
     cf = ax.contourf(X, Y, speed_vane, levels=40, cmap="viridis")
@@ -445,7 +432,7 @@ def plot_velocity_field_fig(
 def plot_vane_3d(
     B,
     h,
-    L_rel,
+    L_rel,          # unused in geometry but laissé pour cohérence
     alpha_attack,
     n_vanes,
     bevel_angle,
@@ -454,7 +441,11 @@ def plot_vane_3d(
 ):
     """
     3D visualisation of the channel and submerged vanes.
-    Bevel = ajout de hauteur côté amont (comme sur ta photo).
+
+    IMPORTANT: la hauteur totale H est la même pour tous les bevels.
+    Le bevel enlève un coin en haut (comme sur la photo) :
+    - θ = 0° : plaque rectangulaire pleine (haut horizontal)
+    - θ > 0° : un côté reste à H, l'autre descend (chanfrein).
     """
 
     L_reach = 40.0
@@ -510,8 +501,10 @@ def plot_vane_3d(
     )
 
     if use_vane:
-        vane_height = 0.3 * h
-        vane_length = 2.0 * h
+        # Hauteur totale commune (H sur ton schéma)
+        H = 0.3 * h           # tu peux ajuster ce ratio si tu veux
+        vane_height = H
+        vane_length = 2.0 * h  # vanes plus longues que hautes
         y_center = B * 0.5
 
         phi = np.deg2rad(alpha_attack)
@@ -519,8 +512,13 @@ def plot_vane_3d(
         xs = np.linspace(L_reach * 0.3, L_reach * 0.7, n_vanes)
         vane_areas = []
 
-        theta_b = np.deg2rad(bevel_angle)
-        dz_bevel = vane_height * 0.6 * np.sin(theta_b)
+        # Bevel : on enlève un coin -> un côté à H, l'autre plus bas
+        bevel_norm = np.clip(bevel_angle / 70.0, 0.0, 1.0)
+        # on peut baisser jusqu'à ~40% de la hauteur à θ = 70°
+        drop_ratio = 0.6 * bevel_norm
+        z_high = H
+        z_low = H * (1.0 - drop_ratio)
+        z_low = max(z_low, 0.1 * H)
 
         first_base_for_alpha = None
 
@@ -530,16 +528,12 @@ def plot_vane_3d(
             dx = vane_length * np.cos(phi)
             dy = vane_length * np.sin(phi)
 
-            # bottom
-            p1 = (x0,          y_center,          z0)
-            p2 = (x0 + dx,     y_center + dy,     z0)
-
-            # top : amont plus haut (bevel = ajout de matériau)
-            z1_top = vane_height + dz_bevel
-            z2_top = vane_height
-
-            p4 = (x0,          y_center,          z1_top)
-            p3 = (x0 + dx,     y_center + dy,     z2_top)
+            # On définit p1, p4 du côté "amont" (x0), p2, p3 aval (x0+dx)
+            # Hypothèse : amont = côté à plus grande hauteur (z_high)
+            p1 = (x0,          y_center,          z0)       # amont bas
+            p2 = (x0 + dx,     y_center + dy,     z0)       # aval bas
+            p4 = (x0,          y_center,          z_high)   # amont haut
+            p3 = (x0 + dx,     y_center + dy,     z_low)    # aval haut (bevel)
 
             poly = Poly3DCollection([[p1, p2, p3, p4]],
                                     facecolor=vane_color,
@@ -547,7 +541,7 @@ def plot_vane_3d(
                                     alpha=0.9)
             ax.add_collection3d(poly)
 
-            area = vane_length * vane_height
+            area = vane_length * vane_height  # aire de base (H constante)
             vane_areas.append(area)
 
             if first_base_for_alpha is None:
@@ -555,7 +549,7 @@ def plot_vane_3d(
 
         total_area = sum(vane_areas)
 
-        # 2D angle indicator
+        # petit dessin pour α
         if first_base_for_alpha is not None:
             bx, by = first_base_for_alpha
             z_alpha = 0.05 * h
@@ -582,11 +576,11 @@ def plot_vane_3d(
 
         txt = (
             f"{n_vanes} vane(s)\n"
-            f"L_rel = {L_rel:.2f}\n"
+            f"H ≈ {H:.2f} m\n"
             f"α = {alpha_attack:.1f}°\n"
             f"Bevel θ = {bevel_angle:.1f}°\n"
             f"Material = {material}\n"
-            f"Total area ≈ {total_area:.1f} m²"
+            f"Base area ≈ {total_area:.1f} m²"
         )
         ax.text(
             L_reach * 0.02,
@@ -606,7 +600,7 @@ def plot_vane_3d(
     ax.set_ylabel("Cross-stream y [m]")
     ax.set_zlabel("Depth z [m]")
 
-    ax.set_title("3D view of submerged vane configuration (α & bevel visible)")
+    ax.set_title("3D view of submerged vane configuration\n(constant height H, bevel cuts the top)")
     ax.view_init(elev=25, azim=-60)
     ax.grid(True, alpha=0.2)
 
