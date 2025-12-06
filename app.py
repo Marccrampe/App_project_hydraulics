@@ -324,8 +324,10 @@ def plot_velocity_field_fig(
     - Haut : flow WITHOUT vanes
     - Bas  : flow WITH vanes (vitesse réduite + déviation latérale)
 
-    On représente un ARRAY de n_vanes ; l'influence hydraulique totale est la
-    somme des contributions de chaque vane (noyau gaussien orienté).
+    Ici les vanes sont :
+      - centrées en x (x0 = Lx/2)
+      - en ARRAY dans la direction transversale (plusieurs y_k)
+      - orientées avec l’angle d’attaque α (par rapport au flow)
     """
 
     # -------- Domaine schématique --------
@@ -343,15 +345,17 @@ def plot_velocity_field_fig(
     V_base = np.zeros_like(U_base)
     speed_base = np.sqrt(U_base**2 + V_base**2)
 
-    # -------- Géométrie des vanes --------
-    yv = Ly / 2.0
-    xs = np.linspace(0.35 * Lx, 0.65 * Lx, n_vanes)  # positions x des vanes
+    # -------- Géométrie des vanes (array dans la largeur) --------
+    x0 = 0.5 * Lx                         # milieu du reach
+    # vanes dans la moitié externe du canal (vers outer bank)
+    y_positions = np.linspace(0.55 * Ly, 0.9 * Ly, n_vanes)
 
+    # longueur géométrique d'une vane
     Bo_phys = 0.3 * B
     scale = Ly / B
-    L_geom = L_rel * Bo_phys * scale  # longueur géométrique d'une vane
+    L_geom = L_rel * Bo_phys * scale
 
-    # Longueur d'influence (augmente avec n_vanes)
+    # longueur d’influence (augmente avec le nombre de vanes)
     L_eff = L_geom * (1.0 + 0.3 * (n_vanes - 1))
     L_eff = np.clip(L_eff, 0.2, 0.8 * Ly)
 
@@ -362,19 +366,20 @@ def plot_velocity_field_fig(
     sigma_s = L_eff / 2.0
     sigma_n = 0.35
 
-    for xv in xs:
-        dx = X - xv
+    for yv in y_positions:
+        dx = X - x0
         dy = Y - yv
         s = dx * np.cos(theta) + dy * np.sin(theta)
         n = -dx * np.sin(theta) + dy * np.cos(theta)
 
         Gk = np.exp(-((s**2) / (2 * sigma_s**2) + (n**2) / (2 * sigma_n**2)))
-        Gk = Gk * (s > -0.3 * L_eff)   # surtout en aval de chaque vane
+        # influence surtout en aval de la moitié de la vane
+        Gk = Gk * (s > -0.3 * L_eff)
         G_total += Gk
 
     G_total = np.clip(G_total, 0.0, 2.0)
 
-    # -------- Effets matériau / géométrie sur l'intensité --------
+    # -------- Effets matériau / géométrie sur l’intensité --------
     n_mult, scour_mult = material_properties(material)
 
     A_base = 0.3
@@ -390,23 +395,23 @@ def plot_velocity_field_fig(
     U = U_base * (1 - A * G_total)
     V = V_base + B_lat * np.tanh(G_total) * G_total
 
-    # petite "animation"
+    # petite pseudo-animation
     U = U * (1.0 + 0.15 * np.sin(2 * np.pi * time_phase))
     V = V * (1.0 + 0.15 * np.cos(2 * np.pi * time_phase))
 
     speed_vane = np.sqrt(U**2 + V**2)
 
-    # Segments pour dessiner chaque vane
+    # -------- Segments pour dessiner chaque vane --------
     vane_segments = []
     halfL_geom = L_geom / 2.0
-    for xv in xs:
-        x1 = xv - halfL_geom * np.cos(theta)
+    for yv in y_positions:
+        x1 = x0 - halfL_geom * np.cos(theta)
         y1 = yv - halfL_geom * np.sin(theta)
-        x2 = xv + halfL_geom * np.cos(theta)
+        x2 = x0 + halfL_geom * np.cos(theta)
         y2 = yv + halfL_geom * np.sin(theta)
         vane_segments.append(((x1, y1), (x2, y2)))
 
-    # -------- Plots --------
+    # -------- Plots : haut = sans, bas = avec array --------
     fig, axes = plt.subplots(2, 1, figsize=(6, 8), sharex=True, sharey=True)
 
     # 1) Sans vanes
@@ -445,6 +450,7 @@ def plot_velocity_field_fig(
 
     plt.tight_layout()
     return fig
+
 
 
 def plot_vane_3d(
