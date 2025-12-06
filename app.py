@@ -274,10 +274,10 @@ def plot_scour_plan_view(
     """
 
     Lx = 20.0
-    Ly = 4.0
+    Ly = 8.0   # <-- plus grand pour éviter l'effet "tassé"
 
-    # *** JUSTE AGRANDI ICI ***
-    fig, ax = plt.subplots(figsize=(8.0, 8.0))
+    # même taille que le plot 3D (6, 5)
+    fig, ax = plt.subplots(figsize=(6.0, 5.0))
 
     # Channel rectangle
     ax.add_patch(Rectangle((0, 0), Lx, Ly, fill=False))
@@ -287,13 +287,13 @@ def plot_scour_plan_view(
     # Main flow arrow
     ax.annotate(
         "",
-        xy=(Lx * 0.8, Ly * 0.2),
-        xytext=(Lx * 0.2, Ly * 0.2),
+        xy=(Lx * 0.8, Ly * 0.25),
+        xytext=(Lx * 0.2, Ly * 0.25),
         arrowprops=dict(arrowstyle="->", linewidth=1.3),
     )
     ax.text(
         Lx * 0.5,
-        Ly * 0.22,
+        Ly * 0.30,
         "Main flow direction",
         ha="center",
         va="bottom",
@@ -301,29 +301,24 @@ def plot_scour_plan_view(
     )
 
     if use_vane:
-        # x fixe pour toutes les vanes (comme ton x ≈ 10 m)
+        # x fixe pour toutes les vanes
         x_vane = 0.5 * Lx
-        # Vanes empilées en y de l'intérieur vers la berge externe
+        # vanes empilées en y, de l'intérieur vers la berge externe
         y_positions = np.linspace(0.35 * Ly, 0.9 * Ly, n_vanes)
 
-        # longueur de la vane en plan (principalement verticale)
-        vane_len = 1.6
+        vane_len = 2.0  # longueur en plan (quasi verticale)
 
-        # angle α : on l'interprète comme une légère inclinaison par rapport à l'axe y
-        # (donc majoritairement vertical, mais qui "pointe" un peu dans le sens du flow).
         phi = np.deg2rad(alpha_attack_deg)
-        dy_vane = vane_len * np.cos(phi)   # composante verticale dominante
-        dx_vane = vane_len * np.sin(phi)   # petite composante streamwise
+        dy_vane = vane_len * np.cos(phi)
+        dx_vane = vane_len * np.sin(phi)
 
-        # Scour footprint size (relative to scour_risk)
-        base_len = 1.2
-        base_width = 0.5
+        base_len = 1.4
+        base_width = 0.6
         size_factor = min(1.0, scour_risk)
-        scour_len = base_len * (0.4 + 0.6 * size_factor)     # streamwise
-        scour_width = base_width * (0.4 + 0.6 * size_factor) # cross-stream
+        scour_len = base_len * (0.4 + 0.6 * size_factor)
+        scour_width = base_width * (0.4 + 0.6 * size_factor)
 
         for y0 in y_positions:
-            # Vane segment (quasi vertical)
             x1 = x_vane - 0.5 * dx_vane
             y1 = y0 - 0.5 * dy_vane
             x2 = x_vane + 0.5 * dx_vane
@@ -331,7 +326,6 @@ def plot_scour_plan_view(
 
             ax.plot([x1, x2], [y1, y2], color="black", lw=2)
 
-            # Scour patch derrière la vane (aval = +x)
             scour_center_x = x2 + 0.6 * scour_len
             scour_center_y = y2
 
@@ -347,8 +341,8 @@ def plot_scour_plan_view(
 
         label = "Local scour patches\n(one per vane, top view)"
         ax.text(
-            Lx * 0.7,
-            Ly * 0.15,
+            Lx * 0.72,
+            Ly * 0.18,
             label,
             ha="center",
             va="bottom",
@@ -358,7 +352,7 @@ def plot_scour_plan_view(
 
         ax.text(
             x_vane + 0.5,
-            y_positions[-1] + 0.3,
+            y_positions[-1] + 0.5,
             f"{n_vanes} submerged vane(s)\nBevel θ = {bevel_angle:.1f}°",
             ha="left",
             va="bottom",
@@ -374,6 +368,7 @@ def plot_scour_plan_view(
     ax.grid(False)
 
     return fig
+
 
 
 def plot_velocity_field_fig(
