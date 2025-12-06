@@ -255,82 +255,121 @@ def build_velocity_field(B, h, Q, n0, alpha_bend, gamma, n_o_eff, nx=50, ny=25):
 # 3. Plot helpers
 # ============================================================
 
-def plot_cross_section(B, h, Bi, Bm, Bo, scour_risk, use_vane, use_bevel):
-    # FIGURE PLUS GRANDE
-    fig, ax = plt.subplots(figsize=(8, 4.5))  # <– taille augmentée
+def plot_scour_plan_view(
+    B,
+    h,
+    n_vanes,
+    bevel_angle,
+    scour_risk,
+    use_vane,
+    alpha_attack_deg,
+):
+    """
+    Plan-view (top) schematic of vanes and local scour zones in the bend.
 
-    # --- Zones de la section ---
-    ax.add_patch(Rectangle((0, 0), Bi, h, fill=False))
-    ax.add_patch(Rectangle((Bi, 0), Bm, h, fill=False))
-    ax.add_patch(Rectangle((Bi + Bm, 0), Bo, h, fill=False))
+    Vanes:
+    - toutes au même x (comme dans ta figure de vitesse),
+    - alignées principalement dans la direction cross-stream (y),
+      avec une légère inclinaison dans le sens du flow contrôlée par α.
+    """
 
-    ax.text(Bi / 2, h * 0.5, "Inner", ha="center", va="center", fontsize=10)
-    ax.text(Bi + Bm / 2, h * 0.5, "Mid", ha="center", va="center", fontsize=10)
-    ax.text(Bi + Bm + Bo / 2, h * 0.5, "Outer bank", ha="center", va="center", fontsize=10)
+    Lx = 20.0
+    Ly = 4.0
 
-    # --- Direction d'écoulement ---
+    fig, ax = plt.subplots(figsize=(6.0, 6.0))
+
+    # Channel rectangle
+    ax.add_patch(Rectangle((0, 0), Lx, Ly, fill=False))
+    ax.text(Lx * 0.02, Ly * 0.05, "Inner side", fontsize=8, ha="left", va="bottom")
+    ax.text(Lx * 0.02, Ly * 0.95, "Outer bank", fontsize=8, ha="left", va="top")
+
+    # Main flow arrow
     ax.annotate(
         "",
-        xy=(B * 0.9, h + 0.25),
-        xytext=(B * 0.1, h + 0.25),
-        arrowprops=dict(arrowstyle="->", linewidth=1.6),
+        xy=(Lx * 0.8, Ly * 0.2),
+        xytext=(Lx * 0.2, Ly * 0.2),
+        arrowprops=dict(arrowstyle="->", linewidth=1.3),
     )
     ax.text(
-        B * 0.5,
-        h + 0.3,
-        "Main flow",
+        Lx * 0.5,
+        Ly * 0.22,
+        "Main flow direction",
         ha="center",
         va="bottom",
-        fontsize=10,
+        fontsize=8,
     )
 
-    # --- Position des vanes (schématique) ---
-    vane_x = Bi + Bm + Bo * 0.3
-    ax.plot([vane_x, vane_x], [0, h * 0.45], lw=3)
-    vane_label = "Vanes"
-    if use_bevel:
-        vane_label += "\n(bevelled)"
-    ax.text(
-        vane_x,
-        h * 0.5,
-        vane_label,
-        ha="center",
-        va="bottom",
-        fontsize=10,
-    )
+    if use_vane:
+        # x fixe pour toutes les vanes (comme ton x ≈ 10 m)
+        x_vane = 0.5 * Lx
+        # Vanes empilées en y de l'intérieur vers la berge externe
+        y_positions = np.linspace(0.35 * Ly, 0.9 * Ly, n_vanes)
 
-    # --- Zone de scouring local (ellipse rouge) ---
-    if use_vane and scour_risk > 0:
-        max_width = 0.25 * Bo
-        max_height = 0.6 * h
-        w = max_width * min(1.0, scour_risk)
-        h_e = max_height * min(1.0, scour_risk)
+        # longueur de la vane en plan (principalement verticale)
+        vane_len = 1.6
 
-        ell = Ellipse(
-            (Bi + Bm + 0.75 * Bo, h * 0.18),
-            width=w,
-            height=h_e,
-            angle=0,
-            color="red",
-            alpha=0.35,
-        )
-        ax.add_patch(ell)
+        # angle α : on l'interprète comme une légère inclinaison par rapport à l'axe y
+        # (donc majoritairement vertical, mais qui "pointe" un peu dans le sens du flow).
+        phi = np.deg2rad(alpha_attack_deg)
+        dy_vane = vane_len * np.cos(phi)   # composante verticale dominante
+        dx_vane = vane_len * np.sin(phi)   # petite composante streamwise
+
+        # Scour footprint size (relative to scour_risk)
+        base_len = 1.2
+        base_width = 0.5
+        size_factor = min(1.0, scour_risk)
+        scour_len = base_len * (0.4 + 0.6 * size_factor)     # streamwise
+        scour_width = base_width * (0.4 + 0.6 * size_factor) # cross-stream
+
+        for y0 in y_positions:
+            # Vane segment (quasi vertical)
+            x1 = x_vane - 0.5 * dx_vane
+            y1 = y0 - 0.5 * dy_vane
+            x2 = x_vane + 0.5 * dx_vane
+            y2 = y0 + 0.5 * dy_vane
+
+            ax.plot([x1, x2], [y1, y2], color="black", lw=2)
+
+            # Scour patch derrière la vane (aval = +x)
+            scour_center_x = x2 + 0.6 * scour_len
+            scour_center_y = y2
+
+            ell = Ellipse(
+                (scour_center_x, scour_center_y),
+                width=scour_len,
+                height=scour_width,
+                angle=np.rad2deg(phi),
+                color="red",
+                alpha=0.3,
+            )
+            ax.add_patch(ell)
+
+        label = "Local scour patches\n(one per vane, top view)"
         ax.text(
-            Bi + Bm + 0.75 * Bo,
-            h * 0.18 + h_e * 0.7,
-            "Local scour zone",
+            Lx * 0.7,
+            Ly * 0.15,
+            label,
             ha="center",
             va="bottom",
-            fontsize=10,
+            fontsize=8,
             color="red",
         )
 
-    ax.set_xlim(-1, B + 1)
-    ax.set_ylim(-0.2, h + 1.0)
-    ax.set_xlabel("Cross-section width [schematic]", fontsize=10)
-    ax.set_ylabel("Depth [schematic]", fontsize=10)
-    ax.set_title("Cross-section & local scour footprint", fontsize=12)
+        ax.text(
+            x_vane + 0.5,
+            y_positions[-1] + 0.3,
+            f"{n_vanes} submerged vane(s)\nBevel θ = {bevel_angle:.1f}°",
+            ha="left",
+            va="bottom",
+            fontsize=8,
+        )
+
+    ax.set_xlim(0, Lx)
+    ax.set_ylim(0, Ly)
     ax.set_aspect("equal", adjustable="box")
+    ax.set_xlabel("Streamwise x [m] (schematic)")
+    ax.set_ylabel("Cross-stream y [m] (schematic)")
+    ax.set_title("Plan-view schematic of local scour around submerged vanes")
     ax.grid(False)
 
     return fig
