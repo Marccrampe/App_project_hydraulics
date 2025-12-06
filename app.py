@@ -109,6 +109,10 @@ def gamma_from_geometry(
     """
     Compute gamma (fraction of outer-zone discharge diverted to mid-channel)
     from vane geometry and material.
+
+    NOTE:
+    - Bevel angle mainly affects local scour (Mandal, ETH),
+      not large-scale flow redistribution in the bend.
     """
 
     # Length factor
@@ -128,20 +132,15 @@ def gamma_from_geometry(
         f_array = 1.0
     f_array = np.clip(f_array, 1.0, 1.5)
 
-    # Bevel effect (shape + flow attachment)
-    if bevel_angle_deg is None or bevel_angle_deg <= 0:
-        f_bevel_geom = 1.0
-    else:
-        # 0° -> 1.0 ; 70° -> 1.25
-        bevel_norm = np.clip(bevel_angle_deg / 70.0, 0.0, 1.0)
-        f_bevel_geom = 1.0 + 0.25 * bevel_norm
-
-    # Material effect
+    # Material effect (rougher → slightly less efficient deflection)
     n_mult_mat, _ = material_properties(material)
     f_mat_gamma = 1.0 - 0.2 * (n_mult_mat - 1.0)
     f_mat_gamma = np.clip(f_mat_gamma, 0.8, 1.1)
 
-    gamma = gamma_base * f_L * f_alpha * f_array * f_bevel_geom * f_mat_gamma
+    # Bevel effect not used for gamma (only scour)
+    f_bevel_geom = 1.0
+
+    gamma = gamma_base * f_L * f_alpha * f_array * f_mat_gamma * f_bevel_geom
     gamma = np.clip(gamma, 0.0, 0.7)
     return gamma
 
@@ -155,11 +154,18 @@ def local_scour_risk_from_geometry(
 ):
     """
     Relative local scour risk indicator around the vanes.
+
+    Bevel effect anchored to Mandal/ETH scour-volume ratios:
+    - θ = 0°   → ratio = 1.00
+    - θ = 30°  → ratio ≈ 0.555
+    - θ = 45°  → ratio ≈ 0.4335
+    - θ = 60°  → ratio ≈ 0.0646
+    - θ = 70°  → ratio = 0.0
     """
 
-    base_risk = 0.8
+    base_risk = 1.0
 
-    # Length effect
+    # Length effect (longer vane → larger scour footprint)
     L_ref = 0.5
     f_L = 1.0 + 0.8 * (L_rel - L_ref)
     f_L = np.clip(f_L, 0.4, 1.8)
@@ -173,18 +179,21 @@ def local_scour_risk_from_geometry(
     f_n = 1.0 + 0.1 * (n_vanes - 1)
     f_n = np.clip(f_n, 1.0, 1.6)
 
-    # Bevel effect: plus θ est grand, moins de scour local (jusqu'à -50 %)
-    if bevel_angle_deg is None or bevel_angle_deg <= 0:
-        f_bevel = 1.0
-    else:
-        bevel_norm = np.clip(bevel_angle_deg / 70.0, 0.0, 1.0)
-        f_bevel = 1.0 - 0.5 * bevel_norm
-        f_bevel = np.clip(f_bevel, 0.5, 1.0)
+    # Bevel effect via scour-volume ratios
+    angle_grid = np.array([0.0, 30.0, 45.0, 60.0, 70.0])
+    vol_ratio_grid = np.array([1.0, 0.555, 0.4335, 0.0646, 0.0])
+
+    theta_clamped = np.clip(
+        bevel_angle_deg if bevel_angle_deg is not None else 0.0,
+        0.0,
+        70.0,
+    )
+    scour_vol_ratio = np.interp(theta_clamped, angle_grid, vol_ratio_grid)
 
     # Material effect
     _, scour_mult_mat = material_properties(material)
 
-    risk = base_risk * f_L * f_alpha * f_n * f_bevel * scour_mult_mat
+    risk = base_risk * f_L * f_alpha * f_n * scour_vol_ratio * scour_mult_mat
     risk = np.clip(risk, 0.0, 1.5)
     return risk
 
@@ -239,8 +248,14 @@ def build_velocity_field(B, h, Q, n0, alpha_bend, gamma, n_o_eff, nx=50, ny=25):
 # 3. Plot helpers
 # ============================================================
 
-def plot_cross_section(B, h, Bi, Bm, Bo, scour_risk, use_vane, use_bevel):
-    fig, ax = plt.subplots(figsize=(5, 3))
+def plot_cross_section(B, h, Bi, Bm, Bo, scour_risk, use_vane, use_bevel, n_vanes):
+    """
+    Cross-section schematic with:
+    - inner / mid / outer zones
+    - all vanes drawn near the outer bank
+    - one scour footprint per vane, sized by scour_risk
+    """
+    fig, ax = plt.subplots(figsize=(6.5, 4))
 
     # Zones
     ax.add_patch(Rectangle((0, 0), Bi, h, fill=False))
@@ -251,53 +266,83 @@ def plot_cross_section(B, h, Bi, Bm, Bo, scour_risk, use_vane, use_bevel):
     ax.text(Bi + Bm / 2, h * 0.5, "Mid", ha="center", va="center", fontsize=8)
     ax.text(Bi + Bm + Bo / 2, h * 0.5, "Outer bank", ha="center", va="center", fontsize=8)
 
-    # Flow
+    # Main flow arrow (just above free surface)
     ax.annotate(
         "",
-        xy=(B * 0.9, h + 0.2),
-        xytext=(B * 0.1, h + 0.2),
+        xy=(B * 0.9, h + 0.25),
+        xytext=(B * 0.1, h + 0.25),
         arrowprops=dict(arrowstyle="->", linewidth=1.3),
     )
-    ax.text(B * 0.5, h + 0.25, "Main flow", ha="center", va="bottom", fontsize=8)
+    ax.text(B * 0.5, h + 0.3, "Main flow", ha="center", va="bottom", fontsize=8)
 
-    # Vane schematic
-    vane_x = Bi + Bm + Bo * 0.3
-    ax.plot([vane_x, vane_x], [0, h * 0.4], lw=3)
-    vane_label = "Vanes"
-    if use_bevel:
-        vane_label += "\n(bevelled)"
-    ax.text(vane_x, h * 0.45, vane_label, ha="center", va="bottom", fontsize=8)
+    # ----- Vanes + scour footprints -----
+    if use_vane:
+        # Vanes in the outer zone
+        vane_group_width = 0.7 * Bo
+        if n_vanes > 1:
+            spacing = vane_group_width / (n_vanes - 1)
+        else:
+            spacing = 0.0
 
-    # Local scour ellipse
-    if use_vane and scour_risk > 0:
+        vane_x_start = Bi + Bm + 0.15 * Bo
+        vane_z_top = h * 0.4
+
+        # Scour footprint size
         max_width = 0.25 * Bo
         max_height = 0.6 * h
         w = max_width * min(1.0, scour_risk)
         h_e = max_height * min(1.0, scour_risk)
-        ell = Ellipse(
-            (Bi + Bm + 0.75 * Bo, h * 0.15),
-            width=w,
-            height=h_e,
-            angle=0,
-            color="red",
-            alpha=0.35,
+
+        for k in range(n_vanes):
+            vx = vane_x_start + k * spacing
+
+            # Vane
+            ax.plot([vx, vx], [0, vane_z_top], lw=3, color="black")
+
+            # Scour ellipse under each vane
+            if scour_risk > 0:
+                ell = Ellipse(
+                    (vx + 0.1 * Bo, h * 0.15),
+                    width=w,
+                    height=h_e,
+                    angle=0,
+                    color="red",
+                    alpha=0.35,
+                )
+                ax.add_patch(ell)
+
+        # Label
+        mid_group_x = (
+            vane_x_start + 0.5 * vane_group_width if n_vanes > 1 else vane_x_start
         )
-        ax.add_patch(ell)
+        vane_label = "Submerged vanes"
+        if use_bevel:
+            vane_label += "\n(bevelled)"
         ax.text(
-            Bi + Bm + 0.75 * Bo,
-            h * 0.15 + h_e * 0.6,
-            "Local scour zone",
+            mid_group_x,
+            vane_z_top + 0.05 * h,
+            vane_label,
             ha="center",
             va="bottom",
             fontsize=8,
-            color="red",
         )
 
+        if scour_risk > 0:
+            ax.text(
+                Bi + Bm + 0.8 * Bo,
+                h * 0.15 + h_e * 0.7,
+                "Local scour footprint\n(one per vane)",
+                ha="center",
+                va="bottom",
+                fontsize=8,
+                color="red",
+            )
+
     ax.set_xlim(-1, B + 1)
-    ax.set_ylim(-0.2, h + 0.8)
-    ax.set_xlabel("Cross-section width [schematic]")
+    ax.set_ylim(-0.2, h + 0.9)
+    ax.set_xlabel("Channel cross-section [schematic]")
     ax.set_ylabel("Depth [schematic]")
-    ax.set_title("Cross-section & local scour footprint")
+    ax.set_title("Local scour around submerged vanes (cross-section view)")
     ax.set_aspect("equal", adjustable="box")
     ax.grid(False)
     return fig
@@ -432,7 +477,7 @@ def plot_velocity_field_fig(
 def plot_vane_3d(
     B,
     h,
-    L_rel,          # unused in geometry but laissé pour cohérence
+    L_rel,          # unused in geometry but left for coherence
     alpha_attack,
     n_vanes,
     bevel_angle,
@@ -442,10 +487,9 @@ def plot_vane_3d(
     """
     3D visualisation of the channel and submerged vanes.
 
-    IMPORTANT: la hauteur totale H est la même pour tous les bevels.
-    Le bevel enlève un coin en haut (comme sur la photo) :
-    - θ = 0° : plaque rectangulaire pleine (haut horizontal)
-    - θ > 0° : un côté reste à H, l'autre descend (chanfrein).
+    Height H is constant; bevel removes a top corner:
+    - θ = 0° : full rectangular plate
+    - θ > 0° : upstream edge high, downstream edge beveled
     """
 
     L_reach = 40.0
@@ -480,31 +524,15 @@ def plot_vane_3d(
     surface = Poly3DCollection(surface_verts, alpha=0.05, facecolor="blue")
     ax.add_collection3d(surface)
 
-    # Outer bank
+    # Outer bank line
     ax.plot([0, L_reach], [B, B], [0, 0], "k-", lw=2)
     ax.text(L_reach * 0.05, B + 0.2, 0.0, "Outer bank", fontsize=9)
 
-    # Flow arrow
-    ax.quiver(
-        0.0, B * 0.15, 0.6 * h,
-        10.0, 0.0, 0.0,
-        length=1.0,
-        normalize=False,
-        arrow_length_ratio=0.2,
-    )
-    ax.text(
-        10.0, B * 0.15, 0.6 * h,
-        "Flow direction",
-        fontsize=9,
-        ha="left",
-        va="center",
-    )
-
     if use_vane:
-        # Hauteur totale commune (H sur ton schéma)
-        H = 0.3 * h           # tu peux ajuster ce ratio si tu veux
+        # Total height H
+        H = 0.3 * h
         vane_height = H
-        vane_length = 2.0 * h  # vanes plus longues que hautes
+        vane_length = 2.0 * h
         y_center = B * 0.5
 
         phi = np.deg2rad(alpha_attack)
@@ -512,9 +540,8 @@ def plot_vane_3d(
         xs = np.linspace(L_reach * 0.3, L_reach * 0.7, n_vanes)
         vane_areas = []
 
-        # Bevel : on enlève un coin -> un côté à H, l'autre plus bas
+        # Bevel effect: downstream edge lower
         bevel_norm = np.clip(bevel_angle / 70.0, 0.0, 1.0)
-        # on peut baisser jusqu'à ~40% de la hauteur à θ = 70°
         drop_ratio = 0.6 * bevel_norm
         z_high = H
         z_low = H * (1.0 - drop_ratio)
@@ -528,12 +555,11 @@ def plot_vane_3d(
             dx = vane_length * np.cos(phi)
             dy = vane_length * np.sin(phi)
 
-            # On définit p1, p4 du côté "amont" (x0), p2, p3 aval (x0+dx)
-            # Hypothèse : amont = côté à plus grande hauteur (z_high)
-            p1 = (x0,          y_center,          z0)       # amont bas
-            p2 = (x0 + dx,     y_center + dy,     z0)       # aval bas
-            p4 = (x0,          y_center,          z_high)   # amont haut
-            p3 = (x0 + dx,     y_center + dy,     z_low)    # aval haut (bevel)
+            # Upstream edge (higher), downstream edge beveled
+            p1 = (x0,          y_center,          z0)       # upstream bottom
+            p2 = (x0 + dx,     y_center + dy,     z0)       # downstream bottom
+            p4 = (x0,          y_center,          z_high)   # upstream top
+            p3 = (x0 + dx,     y_center + dy,     z_low)    # downstream top (bevel)
 
             poly = Poly3DCollection([[p1, p2, p3, p4]],
                                     facecolor=vane_color,
@@ -541,7 +567,7 @@ def plot_vane_3d(
                                     alpha=0.9)
             ax.add_collection3d(poly)
 
-            area = vane_length * vane_height  # aire de base (H constante)
+            area = vane_length * vane_height
             vane_areas.append(area)
 
             if first_base_for_alpha is None:
@@ -549,7 +575,7 @@ def plot_vane_3d(
 
         total_area = sum(vane_areas)
 
-        # petit dessin pour α
+        # Small angle indicator
         if first_base_for_alpha is not None:
             bx, by = first_base_for_alpha
             z_alpha = 0.05 * h
@@ -600,7 +626,7 @@ def plot_vane_3d(
     ax.set_ylabel("Cross-stream y [m]")
     ax.set_zlabel("Depth z [m]")
 
-    ax.set_title("3D view of submerged vane configuration\n(constant height H, bevel cuts the top)")
+    ax.set_title("3D view of submerged vane configuration\n(constant height H, beveled top)")
     ax.view_init(elev=25, azim=-60)
     ax.grid(True, alpha=0.2)
 
@@ -782,7 +808,9 @@ def main():
         st.pyplot(fig_3d)
 
     with top_right:
-        fig_cs = plot_cross_section(B, h, Bi, Bm, Bo, scour_risk, use_vane, use_bevel)
+        fig_cs = plot_cross_section(
+            B, h, Bi, Bm, Bo, scour_risk, use_vane, use_bevel, n_vanes
+        )
         st.pyplot(fig_cs)
 
     # ---------- BOTTOM: velocity field ----------
