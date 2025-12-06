@@ -189,14 +189,9 @@ def local_scour_risk_from_geometry(
     return risk
 
 
-# ============================================================
-# 3. Old pseudo-CFD field (kept in case you want it later)
-# ============================================================
-
+# (Optionnel: vieux pseudo champ 2D - pas utilisé pour la viz velocity actuelle,
+# mais gardé si tu veux en reparler dans le report)
 def build_velocity_field(B, h, Q, n0, alpha_bend, gamma, n_o_eff, nx=50, ny=25):
-    """
-    Build a 2D velocity field in a bend reach using 3-zone velocities.
-    """
     L_reach = 100.0
     x = np.linspace(0, L_reach, nx)
     y = np.linspace(0, B, ny)
@@ -236,13 +231,13 @@ def build_velocity_field(B, h, Q, n0, alpha_bend, gamma, n_o_eff, nx=50, ny=25):
         for j in range(ny):
             if vane_x_start <= X[j, i] <= vane_x_end and y[j] > Bi + Bm:
                 strength = gamma * 0.5
-                Vlat[j, i] = -strength  # towards mid-channel
+                Vlat[j, i] = -strength
 
     return X, Y, U, Vlat, (Bi, Bm, Bo)
 
 
 # ============================================================
-# 4. Plot helpers
+# 3. Plot helpers
 # ============================================================
 
 def plot_cross_section(B, h, Bi, Bm, Bo, scour_risk, use_vane, use_bevel):
@@ -317,6 +312,9 @@ def plot_velocity_field_fig(
     material,
     n_vanes,
     time_phase,
+    red_V,
+    red_tau,
+    scour_risk,
 ):
     """
     Plan view 'pseudo-CFD' :
@@ -329,9 +327,10 @@ def plot_velocity_field_fig(
       - en ARRAY dans la direction transversale (plusieurs y_k côté outer bank)
       - orientées avec l’angle d’attaque α
 
-    Par rapport à la version précédente :
-      - l'effet des vanes est étalé plus loin en aval (wake plus long),
-      - pas de légende qui chevauche le plot, mais un caption en bas.
+    Et on ajoute en bas un caption avec :
+      - Outer-bank velocity reduction
+      - Shear proxy reduction
+      - Local scour risk
     """
 
     # -------- Domaine schématique --------
@@ -364,32 +363,26 @@ def plot_velocity_field_fig(
     # -------- Noyau total G (somme des contributions) --------
     G_total = np.zeros_like(X)
 
-    # sigma_s : échelle longitudinale → plus grande pour effet qui persiste
-    sigma_s = 0.35 * Lx         # ~ 1/3 de la longueur du domaine
-    # sigma_n : échelle transversale (liée à la taille de la vane)
+    # sigma_s : échelle longitudinale (wake)
+    sigma_s = 0.35 * Lx
+    # sigma_n : échelle transversale (lié à la taille de la vane)
     sigma_n = 0.25 + 0.3 * L_geom
 
     for yv in y_positions:
         dx = X - x0
         dy = Y - yv
 
-        # s : coordonnée le long de la vane
-        # n : coordonnée normale à la vane
+        # s le long de la vane, n normal à la vane
         s = dx * np.cos(theta) + dy * np.sin(theta)
         n = -dx * np.sin(theta) + dy * np.cos(theta)
 
-        # On ne veut pas influencer l'amont → on ne garde que s >= 0
-        s_pos = np.maximum(0.0, s)
+        s_pos = np.maximum(0.0, s)  # pas d'influence amont
 
-        # gaussienne anisotrope : longue dans le sens de l'écoulement (sigma_s),
-        # plus serrée en normal (sigma_n)
         Gk = np.exp(-((s_pos**2) / (2 * sigma_s**2) + (n**2) / (2 * sigma_n**2)))
 
-        # Pondération légère par L_rel et le nombre de vanes
         weight = 0.6 + 0.8 * L_rel + 0.1 * (n_vanes - 1)
         G_total += weight * Gk
 
-    # On évite que ça explose si beaucoup de vanes
     G_total = np.clip(G_total, 0.0, 3.0)
 
     # -------- Effets matériau / géométrie sur l’intensité --------
@@ -452,26 +445,30 @@ def plot_velocity_field_fig(
             solid_capstyle="round",
         )
 
-    # 👉 PAS de legend qui chevauche le plot,
-    # mais un petit caption global en bas de la figure
     ax_bot.set_title("Flow WITH submerged vane array\n(reduced velocity + lateral deviation)")
     ax_bot.set_xlabel("x (longitudinal)")
     ax_bot.set_ylabel("y (transversal)")
     ax_bot.set_xlim(0, Lx)
     ax_bot.set_ylim(0, Ly)
 
-    # Caption global
+    # Caption global = ce que tu veux montrer dans ton report
+    caption = (
+        f"Outer-bank velocity reduction ≈ {red_V * 100:.1f}%   |   "
+        f"Shear proxy reduction ≈ {red_tau * 100:.1f}%   |   "
+        f"Local scour risk (relative) ≈ {scour_risk:.2f}"
+    )
     fig.text(
         0.5,
         0.02,
-        "Red lines = submerged vane array (aligned with attack angle α)",
+        caption,
         ha="center",
         va="bottom",
         fontsize=9,
     )
 
-    plt.tight_layout(rect=[0.0, 0.04, 1.0, 1.0])
+    plt.tight_layout(rect=[0.0, 0.05, 1.0, 1.0])
     return fig
+
 
 def plot_vane_3d(
     B,
@@ -646,7 +643,7 @@ def plot_vane_3d(
 
 
 # ============================================================
-# 5. Streamlit App
+# 4. Streamlit App
 # ============================================================
 
 def main():
@@ -831,6 +828,9 @@ def main():
         material=material,
         n_vanes=n_vanes,
         time_phase=time_phase,
+        red_V=red_V,
+        red_tau=red_tau,
+        scour_risk=scour_risk,
     )
     st.pyplot(fig_vf)
 
