@@ -109,6 +109,9 @@ def gamma_from_geometry(
     """
     Compute gamma (fraction of outer-zone discharge diverted to mid-channel)
     from vane geometry and material.
+
+    Ici on interprète le bevel comme un *ajout de matériau* côté amont → aire
+    efficace un peu plus grande → déviation légèrement plus forte.
     """
 
     # Length factor
@@ -128,13 +131,12 @@ def gamma_from_geometry(
         f_array = 1.0
     f_array = np.clip(f_array, 1.0, 1.5)
 
-    # Bevel effect (slight)
+    # Bevel effect as extra effective area (0° → 1.0 ; 70° → 1.25)
     if bevel_angle_deg is None or bevel_angle_deg <= 0:
         f_bevel_geom = 1.0
     else:
-        bevel_ref = 30.0
-        f_bevel_geom = 1.0 + 0.2 * ((bevel_angle_deg - bevel_ref) / bevel_ref)
-        f_bevel_geom = np.clip(f_bevel_geom, 0.8, 1.2)
+        bevel_norm = np.clip(bevel_angle_deg / 70.0, 0.0, 1.0)
+        f_bevel_geom = 1.0 + 0.25 * bevel_norm
 
     # Material effect
     n_mult_mat, _ = material_properties(material)
@@ -173,12 +175,12 @@ def local_scour_risk_from_geometry(
     f_n = 1.0 + 0.1 * (n_vanes - 1)
     f_n = np.clip(f_n, 1.0, 1.6)
 
-    # Bevel effect
+    # Bevel effect: plus θ est grand, moins de scour local (jusqu'à -50 %)
     if bevel_angle_deg is None or bevel_angle_deg <= 0:
         f_bevel = 1.0
     else:
         bevel_norm = np.clip(bevel_angle_deg / 70.0, 0.0, 1.0)
-        f_bevel = 1.0 - 0.5 * bevel_norm  # up to -50% scour at 70°
+        f_bevel = 1.0 - 0.5 * bevel_norm
         f_bevel = np.clip(f_bevel, 0.5, 1.0)
 
     # Material effect
@@ -189,8 +191,8 @@ def local_scour_risk_from_geometry(
     return risk
 
 
-# (reste du vieux pseudo-field gardé si tu veux t’en servir ailleurs)
 def build_velocity_field(B, h, Q, n0, alpha_bend, gamma, n_o_eff, nx=50, ny=25):
+    """Ancien champ simplifié (pas forcément utilisé directement maintenant)."""
     L_reach = 100.0
     x = np.linspace(0, L_reach, nx)
     y = np.linspace(0, B, ny)
@@ -316,16 +318,14 @@ def plot_velocity_field_fig(
     scour_risk,
 ):
     """
-    Plan view 'pseudo-CFD' inspirée de ta version qui marchait bien :
+    Plan view 'pseudo-CFD':
 
     - Écoulement de base : profil parabolique en y
     - Array de vanes alignées avec l’angle d’attaque
-    - U réduit + V latéral local autour des vanes, comme un jet dévié
-    - Caption en bas avec:
-        Outer-bank velocity reduction / Shear proxy reduction / Local scour risk
+    - U réduit + V latéral local autour des vanes (jet dévié)
     """
 
-    # -------- Domaine schématique --------
+    # Domaine schématique
     Lx = 20.0
     Ly = 4.0
     nx, ny = 250, 80
@@ -333,43 +333,41 @@ def plot_velocity_field_fig(
     y = np.linspace(0, Ly, ny)
     X, Y = np.meshgrid(x, y)
 
-    # -------- Écoulement de base --------
+    # Écoulement de base
     U0 = 1.0
     beta = 0.3
     U_base = U0 * (1 - beta * (Y - Ly / 2.0) ** 2)
     V_base = np.zeros_like(U_base)
-    speed_base = np.sqrt(U_base**2 + V_base**2)
 
-    # -------- Vane array geometry --------
-    x0 = 0.5 * Lx                        # centre en x
-    y_positions = np.linspace(0.55 * Ly, 0.9 * Ly, n_vanes)  # proche rive externe
+    # Vane array geometry
+    x0 = 0.5 * Lx
+    y_positions = np.linspace(0.55 * Ly, 0.9 * Ly, n_vanes)
 
-    # longueur de vane (dépend de L_rel & de B)
     Bo_phys = 0.3 * B
     scale = Ly / B
     L_geom = L_rel * Bo_phys * scale
 
     theta = np.deg2rad(alpha_attack)
 
-    # -------- Paramètres intensité --------
+    # Intensités
     n_mult, _ = material_properties(material)
 
     A_base = 0.25
     A = A_base + 0.7 * gamma + 0.05 * (n_vanes - 1)
     A *= 1.0 + 0.15 * (n_mult - 1.0)
-    A = np.clip(A, 0.1, 0.8)   # réduction de U
+    A = np.clip(A, 0.1, 0.8)
 
     B_base = 0.35
     B_lat = B_base + 0.4 * gamma
     B_lat *= 1.0 + 0.2 * (n_mult - 1.0)
-    B_lat = np.clip(B_lat, 0.1, 1.0)  # déviation latérale
+    B_lat = np.clip(B_lat, 0.1, 1.0)
 
-    # -------- Construction du champ perturbé --------
+    # Construction du champ perturbé
     G_total = np.zeros_like(X)
     V = np.zeros_like(X)
 
-    sigma_s = L_geom        # porté ~ longueur de vane
-    sigma_n = 0.3           # épaisseur normale
+    sigma_s = L_geom
+    sigma_n = 0.3
 
     vane_segments = []
     halfL_geom = L_geom / 2.0
@@ -378,18 +376,15 @@ def plot_velocity_field_fig(
         dx = X - x0
         dy = Y - yv
 
-        # coords (s,n) pour cette vane
         s = dx * np.cos(theta) + dy * np.sin(theta)
         n = -dx * np.sin(theta) + dy * np.cos(theta)
 
-        # influence locale : petit wake en aval
         mask = (s > -0.5 * L_geom) & (s < 1.5 * L_geom)
         Gk = np.exp(-((s**2) / (2 * sigma_s**2) + (n**2) / (2 * sigma_n**2))) * mask
 
         G_total += Gk
         V += B_lat * np.tanh(n / sigma_n) * Gk
 
-        # segment pour dessiner la vane
         x1 = x0 - halfL_geom * np.cos(theta)
         y1 = yv - halfL_geom * np.sin(theta)
         x2 = x0 + halfL_geom * np.cos(theta)
@@ -397,17 +392,17 @@ def plot_velocity_field_fig(
         vane_segments.append(((x1, y1), (x2, y2)))
 
     G_total = np.clip(G_total, 0.0, 2.0)
-    V /= max(1, n_vanes)  # on normalise un peu l'effet latéral total
+    V /= max(1, n_vanes)
 
     U = U_base * (1 - A * G_total)
 
-    # petite pseudo-animation
+    # pseudo-animation
     U = U * (1.0 + 0.15 * np.sin(2 * np.pi * time_phase))
     V = V * (1.0 + 0.15 * np.cos(2 * np.pi * time_phase))
 
     speed_vane = np.sqrt(U**2 + V**2)
 
-    # -------- Figure: seulement "WITH vanes" --------
+    # Plot
     fig, ax = plt.subplots(figsize=(6, 5))
 
     cf = ax.contourf(X, Y, speed_vane, levels=40, cmap="viridis")
@@ -459,6 +454,7 @@ def plot_vane_3d(
 ):
     """
     3D visualisation of the channel and submerged vanes.
+    Bevel = ajout de hauteur côté amont (comme sur ta photo).
     """
 
     L_reach = 40.0
@@ -538,7 +534,7 @@ def plot_vane_3d(
             p1 = (x0,          y_center,          z0)
             p2 = (x0 + dx,     y_center + dy,     z0)
 
-            # top (upstream side slightly higher if bevel>0)
+            # top : amont plus haut (bevel = ajout de matériau)
             z1_top = vane_height + dz_bevel
             z2_top = vane_height
 
