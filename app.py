@@ -262,17 +262,21 @@ def plot_scour_plan_view(
     bevel_angle,
     scour_risk,
     use_vane,
+    alpha_attack_deg,
 ):
     """
     Plan-view (top) schematic of vanes and local scour zones in the bend.
-    - Channel is drawn in x-y
-    - Vanes along outer bank
-    - Red patches represent scour behind each vane
+
+    Vanes:
+    - toutes au même x (comme dans ta figure de vitesse),
+    - alignées principalement dans la direction cross-stream (y),
+      avec une légère inclinaison dans le sens du flow contrôlée par α.
     """
+
     Lx = 20.0
     Ly = 4.0
 
-    fig, ax = plt.subplots(figsize=(6.5, 4))
+    fig, ax = plt.subplots(figsize=(6.0, 6.0))
 
     # Channel rectangle
     ax.add_patch(Rectangle((0, 0), Lx, Ly, fill=False))
@@ -296,34 +300,37 @@ def plot_scour_plan_view(
     )
 
     if use_vane:
-        # Vanes placed near outer bank
-        y_vane = 0.8 * Ly
-        xs = np.linspace(Lx * 0.3, Lx * 0.8, n_vanes)
+        # x fixe pour toutes les vanes (comme ton x ≈ 10 m)
+        x_vane = 0.5 * Lx
+        # Vanes empilées en y de l'intérieur vers la berge externe
+        y_positions = np.linspace(0.35 * Ly, 0.9 * Ly, n_vanes)
+
+        # longueur de la vane en plan (principalement verticale)
+        vane_len = 1.6
+
+        # angle α : on l'interprète comme une légère inclinaison par rapport à l'axe y
+        # (donc majoritairement vertical, mais qui "pointe" un peu dans le sens du flow).
+        phi = np.deg2rad(alpha_attack_deg)
+        dy_vane = vane_len * np.cos(phi)   # composante verticale dominante
+        dx_vane = vane_len * np.sin(phi)   # petite composante streamwise
 
         # Scour footprint size (relative to scour_risk)
-        base_len = 1.0
-        base_width = 0.4
+        base_len = 1.2
+        base_width = 0.5
         size_factor = min(1.0, scour_risk)
-        scour_len = base_len * (0.4 + 0.6 * size_factor)   # streamwise
-        scour_width = base_width * (0.4 + 0.6 * size_factor)  # cross-stream
+        scour_len = base_len * (0.4 + 0.6 * size_factor)     # streamwise
+        scour_width = base_width * (0.4 + 0.6 * size_factor) # cross-stream
 
-        # angle of vanes in plan view
-        phi = np.deg2rad(20.0)  # simple fixed schematic inclination
-
-        for x0 in xs:
-            # Vane segment
-            vane_len = 1.5
-            dx = vane_len * np.cos(phi)
-            dy = vane_len * np.sin(phi)
-
-            x1 = x0 - 0.5 * dx
-            y1 = y_vane - 0.5 * dy
-            x2 = x0 + 0.5 * dx
-            y2 = y_vane + 0.5 * dy
+        for y0 in y_positions:
+            # Vane segment (quasi vertical)
+            x1 = x_vane - 0.5 * dx_vane
+            y1 = y0 - 0.5 * dy_vane
+            x2 = x_vane + 0.5 * dx_vane
+            y2 = y0 + 0.5 * dy_vane
 
             ax.plot([x1, x2], [y1, y2], color="black", lw=2)
 
-            # Scour patch behind vane (slightly downstream)
+            # Scour patch derrière la vane (aval = +x)
             scour_center_x = x2 + 0.6 * scour_len
             scour_center_y = y2
 
@@ -340,7 +347,7 @@ def plot_scour_plan_view(
         label = "Local scour patches\n(one per vane, top view)"
         ax.text(
             Lx * 0.7,
-            Ly * 0.1,
+            Ly * 0.15,
             label,
             ha="center",
             va="bottom",
@@ -349,8 +356,8 @@ def plot_scour_plan_view(
         )
 
         ax.text(
-            xs[0],
-            y_vane + 0.3,
+            x_vane + 0.5,
+            y_positions[-1] + 0.3,
             f"{n_vanes} submerged vane(s)\nBevel θ = {bevel_angle:.1f}°",
             ha="left",
             va="bottom",
@@ -834,6 +841,7 @@ def main():
             bevel_angle=bevel_angle,
             scour_risk=scour_risk,
             use_vane=use_vane,
+            alpha_attack_deg=alpha_attack,
         )
         st.pyplot(fig_scour)
 
