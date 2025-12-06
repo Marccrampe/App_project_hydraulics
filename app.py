@@ -273,8 +273,8 @@ def plot_scour_plan_view(
       avec une légère inclinaison dans le sens du flow contrôlée par α.
     """
 
-    Lx = 8.0
-    Ly = 8.0   # <-- plus grand pour éviter l'effet "tassé"
+    Lx = 10.0
+    Ly = 12.0   # <-- plus grand pour éviter l'effet "tassé"
 
     # même taille que le plot 3D (6, 5)
     fig, ax = plt.subplots(figsize=(6,5))
