@@ -277,7 +277,8 @@ def plot_scour_plan_view(
     Ly = 8.0   # <-- plus grand pour éviter l'effet "tassé"
 
     # même taille que le plot 3D (6, 5)
-    fig, ax = plt.subplots(figsize=(6.0, 5.0))
+    fig, ax = plt.subplots(figsize=(8.0, 10.0))
+
 
     # Channel rectangle
     ax.add_patch(Rectangle((0, 0), Lx, Ly, fill=False))
