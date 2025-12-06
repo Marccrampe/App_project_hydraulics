@@ -273,7 +273,7 @@ def plot_scour_plan_view(
       avec une légère inclinaison dans le sens du flow contrôlée par α.
     """
 
-    Lx = 10.0
+    Lx = 12.0
     Ly = 14.0   # <-- plus grand pour éviter l'effet "tassé"
 
     # même taille que le plot 3D (6, 5)
