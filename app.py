@@ -324,10 +324,14 @@ def plot_velocity_field_fig(
     - Haut : flow WITHOUT vanes
     - Bas  : flow WITH vanes (vitesse réduite + déviation latérale)
 
-    Ici les vanes sont :
+    Les vanes sont :
       - centrées en x (x0 = Lx/2)
-      - en ARRAY dans la direction transversale (plusieurs y_k)
-      - orientées avec l’angle d’attaque α (par rapport au flow)
+      - en ARRAY dans la direction transversale (plusieurs y_k côté outer bank)
+      - orientées avec l’angle d’attaque α
+
+    Par rapport à la version précédente :
+      - l'effet des vanes est étalé plus loin en aval (wake plus long),
+      - pas de légende qui chevauche le plot, mais un caption en bas.
     """
 
     # -------- Domaine schématique --------
@@ -347,7 +351,7 @@ def plot_velocity_field_fig(
 
     # -------- Géométrie des vanes (array dans la largeur) --------
     x0 = 0.5 * Lx                         # milieu du reach
-    # vanes dans la moitié externe du canal (vers outer bank)
+    # vanes dans la moitié externe du canal (proche outer bank)
     y_positions = np.linspace(0.55 * Ly, 0.9 * Ly, n_vanes)
 
     # longueur géométrique d'une vane
@@ -355,29 +359,38 @@ def plot_velocity_field_fig(
     scale = Ly / B
     L_geom = L_rel * Bo_phys * scale
 
-    # longueur d’influence (augmente avec le nombre de vanes)
-    L_eff = L_geom * (1.0 + 0.3 * (n_vanes - 1))
-    L_eff = np.clip(L_eff, 0.2, 0.8 * Ly)
-
     theta = np.deg2rad(alpha_attack)
 
     # -------- Noyau total G (somme des contributions) --------
     G_total = np.zeros_like(X)
-    sigma_s = L_eff / 2.0
-    sigma_n = 0.35
+
+    # sigma_s : échelle longitudinale → plus grande pour effet qui persiste
+    sigma_s = 0.35 * Lx         # ~ 1/3 de la longueur du domaine
+    # sigma_n : échelle transversale (liée à la taille de la vane)
+    sigma_n = 0.25 + 0.3 * L_geom
 
     for yv in y_positions:
         dx = X - x0
         dy = Y - yv
+
+        # s : coordonnée le long de la vane
+        # n : coordonnée normale à la vane
         s = dx * np.cos(theta) + dy * np.sin(theta)
         n = -dx * np.sin(theta) + dy * np.cos(theta)
 
-        Gk = np.exp(-((s**2) / (2 * sigma_s**2) + (n**2) / (2 * sigma_n**2)))
-        # influence surtout en aval de la moitié de la vane
-        Gk = Gk * (s > -0.3 * L_eff)
-        G_total += Gk
+        # On ne veut pas influencer l'amont → on ne garde que s >= 0
+        s_pos = np.maximum(0.0, s)
 
-    G_total = np.clip(G_total, 0.0, 2.0)
+        # gaussienne anisotrope : longue dans le sens de l'écoulement (sigma_s),
+        # plus serrée en normal (sigma_n)
+        Gk = np.exp(-((s_pos**2) / (2 * sigma_s**2) + (n**2) / (2 * sigma_n**2)))
+
+        # Pondération légère par L_rel et le nombre de vanes
+        weight = 0.6 + 0.8 * L_rel + 0.1 * (n_vanes - 1)
+        G_total += weight * Gk
+
+    # On évite que ça explose si beaucoup de vanes
+    G_total = np.clip(G_total, 0.0, 3.0)
 
     # -------- Effets matériau / géométrie sur l’intensité --------
     n_mult, scour_mult = material_properties(material)
@@ -385,11 +398,11 @@ def plot_velocity_field_fig(
     A_base = 0.3
     A = A_base + 0.9 * gamma + 0.05 * (n_vanes - 1)
     A *= 1.0 + 0.15 * (n_mult - 1.0)
-    A = np.clip(A, 0.1, 0.95)
+    A = np.clip(A, 0.1, 0.95)   # réduction de vitesse longitudinale
 
     B_base = 0.4
     B_lat = B_base + 0.4 * gamma + 0.2 * (n_mult - 1.0)
-    B_lat = np.clip(B_lat, 0.1, 1.3)
+    B_lat = np.clip(B_lat, 0.1, 1.3)   # amplitude de déviation latérale
 
     # -------- Champ AVEC array --------
     U = U_base * (1 - A * G_total)
@@ -439,19 +452,26 @@ def plot_velocity_field_fig(
             solid_capstyle="round",
         )
 
-    ax_bot.plot([], [], color="red", linewidth=4, label="Submerged vane array")
-    ax_bot.legend(loc="upper right")
-
+    # 👉 PAS de legend qui chevauche le plot,
+    # mais un petit caption global en bas de la figure
     ax_bot.set_title("Flow WITH submerged vane array\n(reduced velocity + lateral deviation)")
     ax_bot.set_xlabel("x (longitudinal)")
     ax_bot.set_ylabel("y (transversal)")
     ax_bot.set_xlim(0, Lx)
     ax_bot.set_ylim(0, Ly)
 
-    plt.tight_layout()
+    # Caption global
+    fig.text(
+        0.5,
+        0.02,
+        "Red lines = submerged vane array (aligned with attack angle α)",
+        ha="center",
+        va="bottom",
+        fontsize=9,
+    )
+
+    plt.tight_layout(rect=[0.0, 0.04, 1.0, 1.0])
     return fig
-
-
 
 def plot_vane_3d(
     B,
