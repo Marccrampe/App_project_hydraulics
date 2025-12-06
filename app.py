@@ -110,9 +110,11 @@ def gamma_from_geometry(
     Compute gamma (fraction of outer-zone discharge diverted to mid-channel)
     from vane geometry and material.
 
-    NOTE:
-    - Bevel angle mainly affects local scour (Mandal, ETH),
-      not large-scale flow redistribution in the bend.
+    Intuition:
+    - L_rel, angle, array, material = principaux drivers.
+    - Le bevel améliore légèrement l'efficacité de déviation
+      pour des angles intermédiaires (≈ meilleures conditions d'attache du jet),
+      mais l'effet reste modéré.
     """
 
     # Length factor
@@ -137,8 +139,13 @@ def gamma_from_geometry(
     f_mat_gamma = 1.0 - 0.2 * (n_mult_mat - 1.0)
     f_mat_gamma = np.clip(f_mat_gamma, 0.8, 1.1)
 
-    # Bevel effect not used for gamma (only scour)
-    f_bevel_geom = 1.0
+    # Bevel effect (mild, best around 30–45°)
+    angle_grid = np.array([0.0, 20.0, 30.0, 45.0, 60.0, 70.0])
+    eff_grid = np.array([1.00, 1.02, 1.05, 1.08, 1.04, 0.98])  # light efficiency bump
+    theta_clamped = np.clip(
+        bevel_angle_deg if bevel_angle_deg is not None else 0.0, 0.0, 70.0
+    )
+    f_bevel_geom = np.interp(theta_clamped, angle_grid, eff_grid)
 
     gamma = gamma_base * f_L * f_alpha * f_array * f_mat_gamma * f_bevel_geom
     gamma = np.clip(gamma, 0.0, 0.7)
@@ -248,103 +255,116 @@ def build_velocity_field(B, h, Q, n0, alpha_bend, gamma, n_o_eff, nx=50, ny=25):
 # 3. Plot helpers
 # ============================================================
 
-def plot_cross_section(B, h, Bi, Bm, Bo, scour_risk, use_vane, use_bevel, n_vanes):
+def plot_scour_plan_view(
+    B,
+    h,
+    n_vanes,
+    bevel_angle,
+    scour_risk,
+    use_vane,
+):
     """
-    Cross-section schematic with:
-    - inner / mid / outer zones
-    - all vanes drawn near the outer bank
-    - one scour footprint per vane, sized by scour_risk
+    Plan-view (top) schematic of vanes and local scour zones in the bend.
+    - Channel is drawn in x-y
+    - Vanes along outer bank
+    - Red patches represent scour behind each vane
     """
+    Lx = 20.0
+    Ly = 4.0
+
     fig, ax = plt.subplots(figsize=(6.5, 4))
 
-    # Zones
-    ax.add_patch(Rectangle((0, 0), Bi, h, fill=False))
-    ax.add_patch(Rectangle((Bi, 0), Bm, h, fill=False))
-    ax.add_patch(Rectangle((Bi + Bm, 0), Bo, h, fill=False))
+    # Channel rectangle
+    ax.add_patch(Rectangle((0, 0), Lx, Ly, fill=False))
+    ax.text(Lx * 0.02, Ly * 0.05, "Inner side", fontsize=8, ha="left", va="bottom")
+    ax.text(Lx * 0.02, Ly * 0.95, "Outer bank", fontsize=8, ha="left", va="top")
 
-    ax.text(Bi / 2, h * 0.5, "Inner", ha="center", va="center", fontsize=8)
-    ax.text(Bi + Bm / 2, h * 0.5, "Mid", ha="center", va="center", fontsize=8)
-    ax.text(Bi + Bm + Bo / 2, h * 0.5, "Outer bank", ha="center", va="center", fontsize=8)
-
-    # Main flow arrow (just above free surface)
+    # Main flow arrow
     ax.annotate(
         "",
-        xy=(B * 0.9, h + 0.25),
-        xytext=(B * 0.1, h + 0.25),
+        xy=(Lx * 0.8, Ly * 0.2),
+        xytext=(Lx * 0.2, Ly * 0.2),
         arrowprops=dict(arrowstyle="->", linewidth=1.3),
     )
-    ax.text(B * 0.5, h + 0.3, "Main flow", ha="center", va="bottom", fontsize=8)
+    ax.text(
+        Lx * 0.5,
+        Ly * 0.22,
+        "Main flow direction",
+        ha="center",
+        va="bottom",
+        fontsize=8,
+    )
 
-    # ----- Vanes + scour footprints -----
     if use_vane:
-        # Vanes in the outer zone
-        vane_group_width = 0.7 * Bo
-        if n_vanes > 1:
-            spacing = vane_group_width / (n_vanes - 1)
-        else:
-            spacing = 0.0
+        # Vanes placed near outer bank
+        y_vane = 0.8 * Ly
+        xs = np.linspace(Lx * 0.3, Lx * 0.8, n_vanes)
 
-        vane_x_start = Bi + Bm + 0.15 * Bo
-        vane_z_top = h * 0.4
+        # Scour footprint size (relative to scour_risk)
+        base_len = 1.0
+        base_width = 0.4
+        size_factor = min(1.0, scour_risk)
+        scour_len = base_len * (0.4 + 0.6 * size_factor)   # streamwise
+        scour_width = base_width * (0.4 + 0.6 * size_factor)  # cross-stream
 
-        # Scour footprint size
-        max_width = 0.25 * Bo
-        max_height = 0.6 * h
-        w = max_width * min(1.0, scour_risk)
-        h_e = max_height * min(1.0, scour_risk)
+        # angle of vanes in plan view
+        phi = np.deg2rad(20.0)  # simple fixed schematic inclination
 
-        for k in range(n_vanes):
-            vx = vane_x_start + k * spacing
+        for x0 in xs:
+            # Vane segment
+            vane_len = 1.5
+            dx = vane_len * np.cos(phi)
+            dy = vane_len * np.sin(phi)
 
-            # Vane
-            ax.plot([vx, vx], [0, vane_z_top], lw=3, color="black")
+            x1 = x0 - 0.5 * dx
+            y1 = y_vane - 0.5 * dy
+            x2 = x0 + 0.5 * dx
+            y2 = y_vane + 0.5 * dy
 
-            # Scour ellipse under each vane
-            if scour_risk > 0:
-                ell = Ellipse(
-                    (vx + 0.1 * Bo, h * 0.15),
-                    width=w,
-                    height=h_e,
-                    angle=0,
-                    color="red",
-                    alpha=0.35,
-                )
-                ax.add_patch(ell)
+            ax.plot([x1, x2], [y1, y2], color="black", lw=2)
 
-        # Label
-        mid_group_x = (
-            vane_x_start + 0.5 * vane_group_width if n_vanes > 1 else vane_x_start
-        )
-        vane_label = "Submerged vanes"
-        if use_bevel:
-            vane_label += "\n(bevelled)"
+            # Scour patch behind vane (slightly downstream)
+            scour_center_x = x2 + 0.6 * scour_len
+            scour_center_y = y2
+
+            ell = Ellipse(
+                (scour_center_x, scour_center_y),
+                width=scour_len,
+                height=scour_width,
+                angle=np.rad2deg(phi),
+                color="red",
+                alpha=0.3,
+            )
+            ax.add_patch(ell)
+
+        label = "Local scour patches\n(one per vane, top view)"
         ax.text(
-            mid_group_x,
-            vane_z_top + 0.05 * h,
-            vane_label,
+            Lx * 0.7,
+            Ly * 0.1,
+            label,
             ha="center",
+            va="bottom",
+            fontsize=8,
+            color="red",
+        )
+
+        ax.text(
+            xs[0],
+            y_vane + 0.3,
+            f"{n_vanes} submerged vane(s)\nBevel θ = {bevel_angle:.1f}°",
+            ha="left",
             va="bottom",
             fontsize=8,
         )
 
-        if scour_risk > 0:
-            ax.text(
-                Bi + Bm + 0.8 * Bo,
-                h * 0.15 + h_e * 0.7,
-                "Local scour footprint\n(one per vane)",
-                ha="center",
-                va="bottom",
-                fontsize=8,
-                color="red",
-            )
-
-    ax.set_xlim(-1, B + 1)
-    ax.set_ylim(-0.2, h + 0.9)
-    ax.set_xlabel("Channel cross-section [schematic]")
-    ax.set_ylabel("Depth [schematic]")
-    ax.set_title("Local scour around submerged vanes (cross-section view)")
+    ax.set_xlim(0, Lx)
+    ax.set_ylim(0, Ly)
     ax.set_aspect("equal", adjustable="box")
+    ax.set_xlabel("Streamwise x [m] (schematic)")
+    ax.set_ylabel("Cross-stream y [m] (schematic)")
+    ax.set_title("Plan-view schematic of local scour around submerged vanes")
     ax.grid(False)
+
     return fig
 
 
@@ -778,7 +798,6 @@ def main():
         gamma=gamma,
     )
     Vo = res["Vo_bend"]
-    (Bi, Bm, Bo) = res["zones_width"]
 
     red_V = 1.0 - Vo / Vo_base
     red_tau = 1.0 - (Vo / Vo_base) ** 2
@@ -791,7 +810,7 @@ def main():
 
     st.markdown("---")
 
-    # ---------- TOP ROW: 3D vanes + cross-section ----------
+    # ---------- TOP ROW: 3D vanes + scour plan view ----------
     top_left, top_right = st.columns(2)
 
     with top_left:
@@ -808,10 +827,15 @@ def main():
         st.pyplot(fig_3d)
 
     with top_right:
-        fig_cs = plot_cross_section(
-            B, h, Bi, Bm, Bo, scour_risk, use_vane, use_bevel, n_vanes
+        fig_scour = plot_scour_plan_view(
+            B=B,
+            h=h,
+            n_vanes=n_vanes,
+            bevel_angle=bevel_angle,
+            scour_risk=scour_risk,
+            use_vane=use_vane,
         )
-        st.pyplot(fig_cs)
+        st.pyplot(fig_scour)
 
     # ---------- BOTTOM: velocity field ----------
     fig_vf = plot_velocity_field_fig(
