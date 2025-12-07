@@ -109,12 +109,6 @@ def gamma_from_geometry(
     """
     Compute gamma (fraction of outer-zone discharge diverted to mid-channel)
     from vane geometry and material.
-
-    Intuition:
-    - L_rel, angle, array, material = principaux drivers.
-    - Le bevel améliore légèrement l'efficacité de déviation
-      pour des angles intermédiaires (≈ meilleures conditions d'attache du jet),
-      mais l'effet reste modéré.
     """
 
     # Length factor
@@ -141,7 +135,7 @@ def gamma_from_geometry(
 
     # Bevel effect (mild, best around 30–45°)
     angle_grid = np.array([0.0, 20.0, 30.0, 45.0, 60.0, 70.0])
-    eff_grid = np.array([1.00, 1.02, 1.05, 1.08, 1.04, 0.98])  # light efficiency bump
+    eff_grid = np.array([1.00, 1.02, 1.05, 1.08, 1.04, 0.98])
     theta_clamped = np.clip(
         bevel_angle_deg if bevel_angle_deg is not None else 0.0, 0.0, 70.0
     )
@@ -161,13 +155,6 @@ def local_scour_risk_from_geometry(
 ):
     """
     Relative local scour risk indicator around the vanes.
-
-    Bevel effect anchored to Mandal/ETH scour-volume ratios:
-    - θ = 0°   → ratio = 1.00
-    - θ = 30°  → ratio ≈ 0.555
-    - θ = 45°  → ratio ≈ 0.4335
-    - θ = 60°  → ratio ≈ 0.0646
-    - θ = 70°  → ratio = 0.0
     """
 
     base_risk = 1.0
@@ -186,10 +173,9 @@ def local_scour_risk_from_geometry(
     f_n = 1.0 + 0.1 * (n_vanes - 1)
     f_n = np.clip(f_n, 1.0, 1.6)
 
-    # Bevel effect via scour-volume ratios
+    # Bevel effect via scour-volume ratios (just used qualitatively)
     angle_grid = np.array([0.0, 30.0, 45.0, 60.0, 70.0])
     vol_ratio_grid = np.array([1.0, 0.555, 0.4335, 0.0646, 0.0])
-
     theta_clamped = np.clip(
         bevel_angle_deg if bevel_angle_deg is not None else 0.0,
         0.0,
@@ -205,7 +191,7 @@ def local_scour_risk_from_geometry(
     return risk
 
 
-# === NEW: spacing effect factor ==============================================
+# === spacing → interaction factor ============================================
 
 def spacing_factor(spacing_rel):
     """
@@ -217,52 +203,6 @@ def spacing_factor(spacing_rel):
     s_opt = 1.3
     f = np.exp(-((spacing_rel - s_opt) ** 2) / 0.5)
     return float(np.clip(f, 0.0, 1.0))
-
-
-def build_velocity_field(B, h, Q, n0, alpha_bend, gamma, n_o_eff, nx=50, ny=25):
-    """Ancien champ simplifié (pas forcément utilisé directement maintenant)."""
-    L_reach = 100.0
-    x = np.linspace(0, L_reach, nx)
-    y = np.linspace(0, B, ny)
-    X, Y = np.meshgrid(x, y)
-
-    hydro = compute_outer_velocity(
-        B=B,
-        h=h,
-        S=0.001,
-        n_i=n0,
-        n_m=n0,
-        n_o=n_o_eff,
-        Q=Q,
-        alpha=alpha_bend,
-        gamma=gamma,
-    )
-    (Bi, Bm, Bo) = hydro["zones_width"]
-    (Vi, Vm, Vo) = hydro["V_after"]
-    Vo_bend = hydro["Vo_bend"]
-
-    U = np.zeros_like(X)
-    Vlat = np.zeros_like(X)
-
-    for j in range(len(y)):
-        yj = y[j]
-        if yj < Bi:
-            U[j, :] = Vi
-        elif yj < Bi + Bm:
-            U[j, :] = Vm
-        else:
-            U[j, :] = Vo_bend
-
-    vane_x_start = 0.4 * L_reach
-    vane_x_end = 0.7 * L_reach
-
-    for i in range(len(x)):
-        for j in range(len(y)):
-            if vane_x_start <= X[j, i] <= vane_x_end and y[j] > Bi + Bm:
-                strength = gamma * 0.5
-                Vlat[j, i] = -strength
-
-    return X, Y, U, Vlat, (Bi, Bm, Bo)
 
 
 # ============================================================
@@ -277,22 +217,17 @@ def plot_scour_plan_view(
     scour_risk,
     use_vane,
     alpha_attack_deg,
+    spacing,
 ):
     """
-    Plan-view (top) schematic of vanes and local scour zones in the bend.
+    Plan-view schematic of vanes and local scour zones.
 
-    Vanes:
-    - toutes au même x (comme dans ta figure de vitesse),
-    - alignées principalement dans la direction cross-stream (y),
-      avec une légère inclinaison dans le sens du flow contrôlée par α.
+    spacing contrôle l'écartement des vanes en y (vers la berge).
     """
 
     Lx = 14.0
-    Ly = 16.0   # <-- plus grand pour éviter l'effet "tassé"
-
-    # même taille que le plot 3D (6, 5)
-    fig, ax = plt.subplots(figsize=(6,5))
-
+    Ly = 16.0
+    fig, ax = plt.subplots(figsize=(6, 5))
 
     # Channel rectangle
     ax.add_patch(Rectangle((0, 0), Lx, Ly, fill=False))
@@ -316,13 +251,20 @@ def plot_scour_plan_view(
     )
 
     if use_vane:
-        # x fixe pour toutes les vanes
         x_vane = 0.5 * Lx
-        # vanes empilées en y, de l'intérieur vers la berge externe
-        y_positions = np.linspace(0.35 * Ly, 0.9 * Ly, n_vanes)
 
-        vane_len = 2.0  # longueur en plan (quasi verticale)
+        # hauteur caractéristique H projetée en y (juste pour donner une échelle)
+        H = 0.3 * h
+        H_y = (H / B) * Ly
+        dy = spacing * H_y  # spacing * H
 
+        # centre des vanes vers la berge externe
+        y_center = 0.75 * Ly
+        idx = np.arange(n_vanes) - (n_vanes - 1) / 2.0
+        y_positions = y_center + idx * dy
+        y_positions = np.clip(y_positions, 0.35 * Ly, 0.95 * Ly)
+
+        vane_len = 2.0
         phi = np.deg2rad(alpha_attack_deg)
         dy_vane = vane_len * np.cos(phi)
         dx_vane = vane_len * np.sin(phi)
@@ -368,7 +310,9 @@ def plot_scour_plan_view(
         ax.text(
             x_vane + 0.5,
             y_positions[-1] + 0.5,
-            f"{n_vanes} submerged vane(s)\nBevel θ = {bevel_angle:.1f}°",
+            f"{n_vanes} submerged vane(s)\n"
+            f"Bevel θ = {bevel_angle:.1f}°\n"
+            f"Spacing = {spacing:.2f} H",
             ha="left",
             va="bottom",
             fontsize=8,
@@ -385,9 +329,9 @@ def plot_scour_plan_view(
     return fig
 
 
-
 def plot_velocity_field_fig(
     B,
+    h,
     L_rel,
     alpha_attack,
     gamma,
@@ -397,9 +341,10 @@ def plot_velocity_field_fig(
     red_V,
     red_tau,
     scour_risk,
+    spacing,
 ):
     """
-    Plan view 'pseudo-CFD'
+    Plan view 'pseudo-CFD' – spacing agit sur la position des vanes en y.
     """
 
     Lx = 20.0
@@ -415,7 +360,15 @@ def plot_velocity_field_fig(
     V_base = np.zeros_like(U_base)
 
     x0 = 0.5 * Lx
-    y_positions = np.linspace(0.55 * Ly, 0.9 * Ly, n_vanes)
+
+    # spacing en y basé sur H projeté
+    H = 0.3 * h
+    H_y = (H / B) * Ly
+    dy = spacing * H_y
+    y_center = 0.7 * Ly
+    idx = np.arange(n_vanes) - (n_vanes - 1) / 2.0
+    y_positions = y_center + idx * dy
+    y_positions = np.clip(y_positions, 0.55 * Ly, 0.95 * Ly)
 
     Bo_phys = 0.3 * B
     scale = Ly / B
@@ -446,10 +399,10 @@ def plot_velocity_field_fig(
 
     for yv in y_positions:
         dx = X - x0
-        dy = Y - yv
+        dy_grid = Y - yv
 
-        s = dx * np.cos(theta) + dy * np.sin(theta)
-        n = -dx * np.sin(theta) + dy * np.cos(theta)
+        s = dx * np.cos(theta) + dy_grid * np.sin(theta)
+        n = -dx * np.sin(theta) + dy_grid * np.cos(theta)
 
         mask = (s > -0.5 * L_geom) & (s < 1.5 * L_geom)
         Gk = np.exp(-((s**2) / (2 * sigma_s**2) + (n**2) / (2 * sigma_n**2))) * mask
@@ -515,19 +468,18 @@ def plot_velocity_field_fig(
 def plot_vane_3d(
     B,
     h,
-    L_rel,          # unused in geometry but left for coherence
+    L_rel,
     alpha_attack,
     n_vanes,
     bevel_angle,
     material,
+    spacing,
     use_vane=True,
 ):
     """
     3D visualisation of the channel and submerged vanes.
 
-    Height H is constant; bevel removes a top corner:
-    - θ = 0° : full rectangular plate
-    - θ > 0° : upstream edge high, downstream edge beveled
+    spacing contrôle la distance entre les vanes en x (le long de l'écoulement).
     """
 
     L_reach = 40.0
@@ -567,7 +519,6 @@ def plot_vane_3d(
     ax.text(L_reach * 0.05, B + 0.2, 0.0, "Outer bank", fontsize=9)
 
     if use_vane:
-        # Total height H
         H = 0.3 * h
         vane_height = H
         vane_length = 2.0 * h
@@ -575,10 +526,16 @@ def plot_vane_3d(
 
         phi = np.deg2rad(alpha_attack)
 
-        xs = np.linspace(L_reach * 0.3, L_reach * 0.7, n_vanes)
+        # spacing en x en fonction de H
+        dx_spacing = spacing * H
+        total_length = dx_spacing * (n_vanes - 1)
+        x_center = 0.5 * L_reach
+        xs = x_center + (np.arange(n_vanes) - (n_vanes - 1) / 2.0) * dx_spacing
+
+        xs = np.clip(xs, 0.2 * L_reach, 0.8 * L_reach)
+
         vane_areas = []
 
-        # Bevel effect: downstream edge lower
         bevel_norm = np.clip(bevel_angle / 70.0, 0.0, 1.0)
         drop_ratio = 0.6 * bevel_norm
         z_high = H
@@ -593,7 +550,6 @@ def plot_vane_3d(
             dx = vane_length * np.cos(phi)
             dy = vane_length * np.sin(phi)
 
-            # Upstream edge (higher), downstream edge beveled
             p1 = (x0,          y_center,          z0)       # upstream bottom
             p2 = (x0 + dx,     y_center + dy,     z0)       # downstream bottom
             p4 = (x0,          y_center,          z_high)   # upstream top
@@ -613,7 +569,6 @@ def plot_vane_3d(
 
         total_area = sum(vane_areas)
 
-        # Small angle indicator
         if first_base_for_alpha is not None:
             bx, by = first_base_for_alpha
             z_alpha = 0.05 * h
@@ -643,6 +598,7 @@ def plot_vane_3d(
             f"H ≈ {H:.2f} m\n"
             f"α = {alpha_attack:.1f}°\n"
             f"Bevel θ = {bevel_angle:.1f}°\n"
+            f"Spacing = {spacing:.2f} H\n"
             f"Material = {material}\n"
             f"Base area ≈ {total_area:.1f} m²"
         )
@@ -682,7 +638,7 @@ def main():
     st.title("🌊 Submerged Vane Bend Lab")
     st.markdown(
         "Interactive toy model for **river bend hydraulics** with submerged vanes,\n"
-        "materials, bevels, arrays, and local scour risk."
+        "materials, bevels, arrays, spacing, and local scour risk."
     )
 
     # ---------- Sidebar: bend config ----------
@@ -754,7 +710,6 @@ def main():
     if not use_bevel:
         bevel_angle = 0.0
 
-    # 🔹 NEW: spacing slider
     spacing = st.sidebar.slider(
         "Vane spacing (in vane heights H)",
         0.5,
@@ -781,7 +736,6 @@ def main():
         f_spacing = 0.0
         n_mult, _ = material_properties("concrete")
     else:
-        # facteur lié au spacing
         f_spacing = spacing_factor(spacing)
 
         gamma_raw = gamma_from_geometry(
@@ -793,9 +747,7 @@ def main():
             material=material,
             gamma_base=0.25,
         )
-        # spacing influence la redistribution (gamma)
-        #  → spacing optimal → gamma ≈ gamma_raw
-        #  → spacing mauvais → gamma réduit
+
         gamma = gamma_raw * (0.5 + 0.5 * f_spacing)
         gamma = float(np.clip(gamma, 0.0, 0.7))
 
@@ -806,7 +758,6 @@ def main():
             bevel_angle_deg=bevel_angle,
             material=material,
         )
-        # spacing optimal → un peu moins de scour (interaction plus douce)
         scour_risk = scour_base * (1.0 - 0.3 * f_spacing)
         scour_risk = float(np.clip(scour_risk, 0.0, 1.5))
 
@@ -845,7 +796,7 @@ def main():
     red_V = 1.0 - Vo / Vo_base
     red_tau = 1.0 - (Vo / Vo_base) ** 2
 
-    # ---------- Quick config header (bevel + spacing) ----------
+    # ---------- Quick config header ----------
     st.markdown(
         f"**Current vane setup:** "
         f"Bevel angle = `{bevel_angle:.1f}°`, "
@@ -873,6 +824,7 @@ def main():
             n_vanes=n_vanes,
             bevel_angle=bevel_angle,
             material=material,
+            spacing=spacing,
             use_vane=use_vane,
         )
         st.pyplot(fig_3d)
@@ -886,12 +838,14 @@ def main():
             scour_risk=scour_risk,
             use_vane=use_vane,
             alpha_attack_deg=alpha_attack,
+            spacing=spacing,
         )
         st.pyplot(fig_scour)
 
     # ---------- BOTTOM: velocity field ----------
     fig_vf = plot_velocity_field_fig(
         B=B,
+        h=h,
         L_rel=L_rel,
         alpha_attack=alpha_attack,
         gamma=gamma,
@@ -901,6 +855,7 @@ def main():
         red_V=red_V,
         red_tau=red_tau,
         scour_risk=scour_risk,
+        spacing=spacing,
     )
     st.pyplot(fig_vf)
 
@@ -914,7 +869,7 @@ def main():
         f"- **Material**: {material} (nᵒ effective ≈ {n_o_eff:.3f})  \n"
         f"- **L_rel** = {L_rel:.2f}, **attack angle** = {alpha_attack:.1f}°, "
         f"**n_vanes** = {n_vanes}, **bevel angle θ** = {bevel_angle:.1f}°  \n"
-        f"- **Spacing** = {spacing:.2f} H (dimensionless), **spacing factor** fₛ ≈ {f_spacing:.2f}  \n"
+        f"- **Spacing** = {spacing:.2f} H, **spacing factor** fₛ ≈ {f_spacing:.2f}  \n"
         f"- **γ_raw (geometry)** ≈ {gamma_raw:.3f}  \n"
         f"- **γ (effective deflected Qo)** ≈ {gamma:.3f}  \n"
         f"- **Outer-bank velocity reduction** ≈ {red_V * 100:.1f}%  \n"
