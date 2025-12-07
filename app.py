@@ -205,6 +205,20 @@ def local_scour_risk_from_geometry(
     return risk
 
 
+# === NEW: spacing effect factor ==============================================
+
+def spacing_factor(spacing_rel):
+    """
+    Dimensionless interaction factor for vane spacing (in H units).
+
+    - spacing_rel ≈ 1.3 H → optimum → f_s ≈ 1
+    - très petit ou très grand spacing → f_s ↓
+    """
+    s_opt = 1.3
+    f = np.exp(-((spacing_rel - s_opt) ** 2) / 0.5)
+    return float(np.clip(f, 0.0, 1.0))
+
+
 def build_velocity_field(B, h, Q, n0, alpha_bend, gamma, n_o_eff, nx=50, ny=25):
     """Ancien champ simplifié (pas forcément utilisé directement maintenant)."""
     L_reach = 100.0
@@ -740,6 +754,16 @@ def main():
     if not use_bevel:
         bevel_angle = 0.0
 
+    # 🔹 NEW: spacing slider
+    spacing = st.sidebar.slider(
+        "Vane spacing (in vane heights H)",
+        0.5,
+        3.0,
+        1.3,
+        0.1,
+        help="1.2–1.5 H ≈ optimal interaction from flume studies.",
+    )
+
     time_phase = st.sidebar.slider(
         "Time / animation phase",
         0.0,
@@ -752,10 +776,15 @@ def main():
     # ---------- Hydraulics ----------
     if not use_vane:
         gamma = 0.0
+        gamma_raw = 0.0
         scour_risk = 0.0
+        f_spacing = 0.0
         n_mult, _ = material_properties("concrete")
     else:
-        gamma = gamma_from_geometry(
+        # facteur lié au spacing
+        f_spacing = spacing_factor(spacing)
+
+        gamma_raw = gamma_from_geometry(
             L_rel=L_rel,
             alpha_attack_deg=alpha_attack,
             n_vanes=n_vanes,
@@ -764,13 +793,23 @@ def main():
             material=material,
             gamma_base=0.25,
         )
-        scour_risk = local_scour_risk_from_geometry(
+        # spacing influence la redistribution (gamma)
+        #  → spacing optimal → gamma ≈ gamma_raw
+        #  → spacing mauvais → gamma réduit
+        gamma = gamma_raw * (0.5 + 0.5 * f_spacing)
+        gamma = float(np.clip(gamma, 0.0, 0.7))
+
+        scour_base = local_scour_risk_from_geometry(
             L_rel=L_rel,
             alpha_attack_deg=alpha_attack,
             n_vanes=n_vanes,
             bevel_angle_deg=bevel_angle,
             material=material,
         )
+        # spacing optimal → un peu moins de scour (interaction plus douce)
+        scour_risk = scour_base * (1.0 - 0.3 * f_spacing)
+        scour_risk = float(np.clip(scour_risk, 0.0, 1.5))
+
         n_mult, _ = material_properties(material)
 
     n_o_eff = n0 * n_mult
@@ -805,6 +844,14 @@ def main():
 
     red_V = 1.0 - Vo / Vo_base
     red_tau = 1.0 - (Vo / Vo_base) ** 2
+
+    # ---------- Quick config header (bevel + spacing) ----------
+    st.markdown(
+        f"**Current vane setup:** "
+        f"Bevel angle = `{bevel_angle:.1f}°`, "
+        f"Spacing = `{spacing:.2f} H`, "
+        f"n_vanes = `{n_vanes}`"
+    )
 
     # ---------- Metrics ----------
     col1, col2, col3 = st.columns(3)
@@ -867,7 +914,9 @@ def main():
         f"- **Material**: {material} (nᵒ effective ≈ {n_o_eff:.3f})  \n"
         f"- **L_rel** = {L_rel:.2f}, **attack angle** = {alpha_attack:.1f}°, "
         f"**n_vanes** = {n_vanes}, **bevel angle θ** = {bevel_angle:.1f}°  \n"
-        f"- **γ (deflected Qo)** ≈ {gamma:.3f}  \n"
+        f"- **Spacing** = {spacing:.2f} H (dimensionless), **spacing factor** fₛ ≈ {f_spacing:.2f}  \n"
+        f"- **γ_raw (geometry)** ≈ {gamma_raw:.3f}  \n"
+        f"- **γ (effective deflected Qo)** ≈ {gamma:.3f}  \n"
         f"- **Outer-bank velocity reduction** ≈ {red_V * 100:.1f}%  \n"
         f"- **Shear proxy reduction** ≈ {red_tau * 100:.1f}%  \n"
         f"- **Local scour risk (relative)** ≈ {scour_risk:.2f}"
